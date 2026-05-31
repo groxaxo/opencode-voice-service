@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment
+venv/
+venv_*/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+*.icloud
+
+# Audio artifacts
+*.wav
+*.mp3
+*.aiff
+*.ogg
+
+# Logs
+*.log
+*.pid

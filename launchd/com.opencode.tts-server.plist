@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd plist for Chatterbox TTS server (mlx-audio).
+  Autostarts on login and survives reboots.
+
+  Template file — HOME_PLACEHOLDER is substituted by setup.sh.
+  After setup, edit ~/Library/LaunchAgents/com.opencode.tts-server.plist
+  to change port or model.
+
+  Install:
+    launchctl load ~/Library/LaunchAgents/com.opencode.tts-server.plist
+
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.opencode.tts-server.plist
+
+  Check:
+    launchctl list | grep opencode.tts
+    tail -f ~/.config/opencode/tts-server.log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.opencode.tts-server</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>HOME_PLACEHOLDER/.config/opencode/tts-venv/bin/python3</string>
+        <string>-m</string>
+        <string>mlx_audio.server</string>
+        <string>--port</string>
+        <string>8765</string>
+        <string>--model</string>
+        <string>theoracleguy/Chatterbox-Multilingual-MLX-v2-Q8</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>HOME_PLACEHOLDER/.config/opencode/tts-server.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>HOME_PLACEHOLDER/.config/opencode/tts-server.log</string>
+
+    <key>WorkingDirectory</key>
+    <string>HOME_PLACEHOLDER/.config/opencode</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>HOME_PLACEHOLDER/.config/opencode/tts-venv/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>
