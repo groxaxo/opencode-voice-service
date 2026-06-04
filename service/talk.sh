@@ -3,12 +3,12 @@
 #
 # A complete voice conversation cycle in two commands:
 #   talk.sh listen   → VAD record + STT → prints transcribed text
-#   talk.sh speak    → TTS (xAI default, VibeVoice fallback), then auto-listen
+#   talk.sh speak    → xAI TTS, then auto-listen for next utterance (default)
 #
 # Depends on:
 #   vad_recorder.py  (Silero VAD + sounddevice)
-#   tts.sh           (xAI / VibeVoice / say)
-#   Parakeet STT     (local CoreML default :5093)
+#   tts.sh           (xAI TTS default; Chatterbox optional)
+#   Parakeet STT     (remote, http://100.85.200.51:5092)
 #
 # Usage:
 #   talk.sh listen                  — record one utterance, transcribe, print text
@@ -24,27 +24,20 @@ SERVICE_DIR="$(cd "$(dirname "$0")" && pwd)"
 # --- Configurable settings ---------------------------------------------------
 # Python env (tts-venv with silero-vad, sounddevice, onnxruntime, torch)
 : "${PYTHON:=}"  # auto-detect below
-# TTS (xAI default, VibeVoice fallback — tts-multimodel-api :8010)
+# TTS (xAI default — same API as OpenVoiceApp VoiceBridge)
 : "${TTS_ENGINE:=xai}"
-: "${VIBEVOICE_MODEL:=vibe-realtime-8bit}"
-: "${VIBEVOICE_VOICE:=en-Emma_woman}"
-: "${VIBEVOICE_VOICE_AUTO:=0}"
-: "${VIBEVOICE_CFG_SCALE:=1.5}"
-: "${VIBEVOICE_DDPM_STEPS:=5}"
-export TTS_ENGINE
-# STT: local Parakeet CoreML (FluidInference/parakeet-tdt-0.6b-v3-coreml via speech-server)
-: "${STT_ENGINE:=coreml}"   # coreml | remote; both default to local :5093 unless env overrides
-: "${STT_URL:=http://127.0.0.1:5093/v1/audio/transcriptions}"
-: "${STT_MODEL:=FluidInference/parakeet-tdt-0.6b-v3-coreml}"
-: "${STT_REMOTE_URL:=http://127.0.0.1:5093/v1/audio/transcriptions}"
-: "${STT_REMOTE_MODEL:=FluidInference/parakeet-tdt-0.6b-v3-coreml}"
+: "${XAI_TTS_VOICE:=eve}"
+: "${TTS_ENABLE_CHATTERBOX_FALLBACK:=1}"
+# Optional local Chatterbox (mlx-audio on :8765)
+: "${TTS_SERVER:=http://localhost:8765}"
+# STT endpoint (remote Parakeet)
+: "${STT_URL:=http://100.85.200.51:5092/v1/audio/transcriptions}"
+: "${STT_MODEL:=istupakov/parakeet-tdt-0.6b-v3-onnx}"
 # VAD parameters (passed to vad_recorder.py)
 : "${VAD_MIN_SILENCE_MS:=500}"
 : "${VAD_THRESHOLD:=0.5}"
 # Mic device selection
-# Default targets the built-in mic and the find_mic() logic explicitly
-# excludes "nomachine" (and other virtual adapters).
-: "${MIC_QUERY:=MacBook Air Microphone}"
+: "${MIC_QUERY:=MacBook}"
 # Ready cue before listen (short tone so user knows when to speak)
 : "${TALK_READY_CUE:=1}"
 : "${TALK_READY_SOUND:=/System/Library/Sounds/Tink.aiff}"
@@ -67,79 +60,9 @@ if [ ! -x "$TTS_SH" ]; then
 fi
 VAD_PY="$SERVICE_DIR/vad_recorder.py"
 
-TTS_LANG_SH="${TTS_LANG_SH:-$HOME/.config/opencode/tts_lang.sh}"
-# shellcheck source=/dev/null
-[ -f "$TTS_LANG_SH" ] && . "$TTS_LANG_SH"
-
-resolve_stt() {
-    if [ "${STT_ENGINE}" = "remote" ]; then
-        printf '%s\n%s\n' "${STT_REMOTE_URL:-$STT_URL}" "${STT_REMOTE_MODEL:-$STT_MODEL}"
-    else
-        printf '%s\n%s\n' "$STT_URL" "$STT_MODEL"
-    fi
-}
-
-transcribe_file() {
-    local file="$1"
-    local stt_url="$2"
-    local stt_model="$3"
-    local response_file http_code
-
-    response_file="$(mktemp /tmp/opencode-stt-response.XXXXXX.json)"
-    http_code=$(curl -sS -m "${STT_TIMEOUT_SECONDS:-45}" \
-        -o "$response_file" \
-        -w '%{http_code}' \
-        "$stt_url" \
-        -F "file=@$file" \
-        -F "model=$stt_model") || {
-        local curl_status=$?
-        echo "STT request failed (curl exit $curl_status): $stt_url" >&2
-        rm -f "$response_file"
-        return 1
-    }
-
-    if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
-        echo "STT request failed (HTTP $http_code): $stt_url" >&2
-        sed -n '1,12p' "$response_file" >&2
-        rm -f "$response_file"
-        return 1
-    fi
-
-    local parse_status=0
-    "$PYTHON" - "$response_file" <<'PY' || parse_status=$?
-import json
-import sys
-
-path = sys.argv[1]
-try:
-    with open(path, "r", encoding="utf-8") as f:
-        payload = json.load(f)
-except Exception as exc:
-    print(f"STT response was not valid JSON: {exc}", file=sys.stderr)
-    sys.exit(1)
-
-if isinstance(payload, dict):
-    text = payload.get("text")
-    if isinstance(text, str):
-        print(text)
-        sys.exit(0)
-    error = payload.get("error")
-    if error:
-        print(f"STT error: {error}", file=sys.stderr)
-        sys.exit(1)
-
-print(f"STT response did not contain a text field: {payload!r}", file=sys.stderr)
-sys.exit(1)
-PY
-    rm -f "$response_file"
-    return "$parse_status"
-}
-
 detect_lang() {
     local text="$1"
-    if [ -f "$TTS_LANG_SH" ]; then
-        resolve_lang "" "$text"
-    elif echo "$text" | LC_ALL=C grep -q '[áéíóúñü¿¡ÁÉÍÓÚÑÜ]'; then
+    if echo "$text" | LC_ALL=C grep -q '[áéíóúñü¿¡ÁÉÍÓÚÑÜ]'; then
         echo "es"
     else
         echo "en"
@@ -187,14 +110,11 @@ for line in sys.stdin:
         exit 0
     fi
 
-    # Transcribe (local CoreML Parakeet by default)
-    local stt_url stt_model text
-    stt_url="$(resolve_stt | sed -n '1p')"
-    stt_model="$(resolve_stt | sed -n '2p')"
-    if ! text=$(transcribe_file "$file" "$stt_url" "$stt_model"); then
-        rm -f "$file"
-        return 1
-    fi
+    # Transcribe via remote Parakeet STT
+    local text
+    text=$(curl -s "$STT_URL" \
+        -F "file=@$file" \
+        -F "model=$STT_MODEL" | "$PYTHON" -c "import json,sys; print(json.load(sys.stdin).get('text',''))" 2>/dev/null)
 
     echo "$text"
     rm -f "$file"
@@ -204,13 +124,10 @@ cmd_speak() {
     local text="$1"
     local lang="${2:-$(detect_lang "$text")}"
     TTS_ENGINE="$TTS_ENGINE" \
-    VIBEVOICE_MODEL="${VIBEVOICE_MODEL:-vibe-realtime-8bit}" \
-    VIBEVOICE_VOICE="${VIBEVOICE_VOICE:-en-Emma_woman}" \
-    VIBEVOICE_VOICE_AUTO="${VIBEVOICE_VOICE_AUTO:-0}" \
-    VIBEVOICE_CFG_SCALE="${VIBEVOICE_CFG_SCALE:-1.5}" \
-    VIBEVOICE_DDPM_STEPS="${VIBEVOICE_DDPM_STEPS:-5}" \
-    VIBEVOICE_WS_URI="${VIBEVOICE_WS_URI:-ws://127.0.0.1:8010/ws/tts}" \
-        bash "$TTS_SH" "$text" "$lang"
+    XAI_TTS_VOICE="$XAI_TTS_VOICE" \
+    TTS_ENABLE_CHATTERBOX_FALLBACK="$TTS_ENABLE_CHATTERBOX_FALLBACK" \
+        bash "$TTS_SH" "$text" "$lang" \
+        || say -v "Monica" "$text"
 
     # Pipeline: mic opens as soon as TTS ends so the user can talk while the
     # agent is still preparing the next LLM call.
@@ -237,117 +154,40 @@ cmd_loop() {
     done
 }
 
-stt_memory_stats() {
-    local parakeet_dir="$HOME/Library/Application Support/FluidAudio/Models/parakeet-tdt-0.6b-v3"
-    if [ -d "$parakeet_dir" ]; then
-        echo "  Model on disk (compiled CoreML): $(du -sh "$parakeet_dir" 2>/dev/null | awk '{print $1}')"
-    else
-        echo "  Model on disk: not found (first STT run will download)"
-    fi
-
-    local hf_cache="$HOME/.cache/huggingface/hub/models--FluidInference--parakeet-tdt-0.6b-v3-coreml"
-    if [ -d "$hf_cache" ]; then
-        echo "  HF cache (duplicate, safe to delete): $(du -sh "$hf_cache" 2>/dev/null | awk '{print $1}')"
-    else
-        echo "  HF cache: not present"
-    fi
-
-    local pocket_cache="$HOME/.cache/fluidaudio"
-    if [ -d "$pocket_cache" ]; then
-        echo "  fluidaudio cache (PocketTTS, optional): $(du -sh "$pocket_cache" 2>/dev/null | awk '{print $1}')"
-    fi
-
-    local stt_pid
-    stt_pid=$(pgrep -f '/Users/op/bin/speech-server' | head -1)
-    if [ -z "$stt_pid" ]; then
-        echo "  speech-server: not running"
-        return 0
-    fi
-
-    echo "  speech-server PID: $stt_pid"
-    ps -p "$stt_pid" -o rss=,%cpu= 2>/dev/null | awk '{printf "  ps RSS (app only): %.0f MB  CPU: %s%%\n", $1/1024, $2}'
-    if command -v footprint >/dev/null 2>&1; then
-        footprint "$stt_pid" 2>/dev/null | awk '
-            /Footprint:/ { sub(/^.*Footprint: /,""); fp=$0 }
-            /phys_footprint:/ && !/peak/ { phys=$2" "$3 }
-            /phys_footprint_peak:/ { phys_peak=$2" "$3 }
-            /neural_peak:/ { neural=$2" "$3 }
-            END {
-                if (fp) printf "  footprint total: %s\n", fp
-                if (phys) printf "  phys footprint (dirty app RAM): %s\n", phys
-                if (phys_peak) printf "  phys footprint peak: %s\n", phys_peak
-                if (neural) printf "  neural_peak (CoreML/ANE model): %s\n", neural
-            }'
-    fi
-}
-
 cmd_status() {
     echo "=== Audio Input Devices ==="
     "$PYTHON" "$VAD_PY" --list-devices 2>&1 | grep -v '^$'
     echo ""
-    echo "=== Selected Microphone (MIC_QUERY=${MIC_QUERY:-<default>}) ==="
-    "$PYTHON" "$VAD_PY" --print-selected-mic --mic-query "${MIC_QUERY:-MacBook Air Microphone}" 2>&1 || echo "(selection failed)"
-    echo ""
 
-    echo "=== TTS (engine=$TTS_ENGINE) ==="
-    if [ "$TTS_ENGINE" = "xai" ]; then
-        echo "  xAI voice: ${XAI_TTS_VOICE:-eve}"
-        echo "  xAI model: ${XAI_TTS_MODEL:-grok-2-audio}"
-        echo "  API key: $([ -n "${XAI_API_KEY:-}" ] && echo 'set' || echo 'NOT SET')"
-        echo "  Fallback: VibeVoice → macOS say"
-    elif [ "$TTS_ENGINE" = "vibevoice" ] || [ "$TTS_ENGINE" = "vibe" ] || [ "$TTS_ENGINE" = "mlx-vibe" ]; then
-        echo "  VibeVoice model: ${VIBEVOICE_MODEL:-vibe-realtime-8bit}"
-        echo "  VibeVoice voice: ${VIBEVOICE_VOICE:-en-Emma_woman}"
-        echo "  Auto voice (es/en): ${VIBEVOICE_VOICE_AUTO:-0}"
-        echo "  CFG scale: ${VIBEVOICE_CFG_SCALE:-1.5}"
-        echo "  DDPM steps: ${VIBEVOICE_DDPM_STEPS:-5}"
+    echo "=== TTS (engine=$TTS_ENGINE, xAI voice=$XAI_TTS_VOICE) ==="
+    if [ "$TTS_ENGINE" = "xai" ] || [ "$TTS_ENGINE" = "grok" ]; then
+        if [ -n "${XAI_API_KEY:-}" ] || grep -q '^XAI_API_KEY=' \
+            "$HOME/Documents/IOSAPP/voice-bridge/.env" \
+            "$HOME/.hermes/.env" \
+            "$HOME/.config/opencode/.env" 2>/dev/null; then
+            echo "  xAI API key: configured"
+        else
+            echo "  xAI API key: MISSING — set XAI_API_KEY or add to voice-bridge/.env"
+        fi
+        echo "  Chatterbox fallback: $([ "$TTS_ENABLE_CHATTERBOX_FALLBACK" = 1 ] && echo enabled || echo disabled)"
     fi
-    local vibevoice_http_url="${VIBEVOICE_WS_URI:-ws://127.0.0.1:8010/ws/tts}"
-    vibevoice_http_url="$(printf '%s' "$vibevoice_http_url" | sed 's|^ws://|http://|')"
-    vibevoice_http_url="${vibevoice_http_url%/ws/tts}/health"
-    echo "=== VibeVoice API (${VIBEVOICE_WS_URI:-ws://127.0.0.1:8010/ws/tts}, local MLX) ==="
-    if curl -sf -m 2 "$vibevoice_http_url" >/dev/null 2>&1; then
-        curl -sf "$vibevoice_http_url" | "$PYTHON" -c "
-import json,sys
-h=json.load(sys.stdin)
-print('  RUNNING — loaded:', ', '.join(h.get('loaded_models') or []) or 'lazy')
-print('  models:', ', '.join(h.get('available_models') or []))
-" 2>/dev/null || echo "  RUNNING"
+    echo "=== Chatterbox server ($TTS_SERVER, optional) ==="
+    local tts_host
+    tts_host=$(echo "$TTS_SERVER" | sed 's|http://||;s|/.*||')
+    if nc -z -w 2 "${tts_host%:*}" "${tts_host#*:}" 2>/dev/null; then
+        echo "  RUNNING"
     else
-        echo "  NOT RUNNING (launchctl kickstart -k gui/\$UID/com.op.tts-multimodel-api)"
+        echo "  NOT RUNNING (only needed for TTS_ENGINE=chatterbox or fallback)"
     fi
     echo ""
 
-    local stt_model stt_url
-    stt_url="$(resolve_stt | sed -n '1p')"
-    stt_model="$(resolve_stt | sed -n '2p')"
-    echo "=== STT (engine=$STT_ENGINE, model=$stt_model) ==="
-    echo "  Endpoint: $stt_url"
+    echo "=== STT Server ($STT_URL) ==="
     local stt_host
-    stt_host=$(echo "$stt_url" | sed 's|http://||;s|/.*||')
+    stt_host=$(echo "$STT_URL" | sed 's|http://||;s|/.*||')
     if nc -z -w 2 "${stt_host%:*}" "${stt_host#*:}" 2>/dev/null; then
         echo "  REACHABLE"
     else
         echo "  NOT REACHABLE"
-    fi
-    if [ "${STT_ENGINE}" != "remote" ]; then
-        if launchctl print "gui/$(id -u)/com.opencode.parakeet-stt" >/dev/null 2>&1; then
-            echo "  launchd: com.opencode.parakeet-stt running"
-        else
-            echo "  launchd: com.opencode.parakeet-stt not loaded"
-        fi
-        stt_memory_stats
-    fi
-    local sample_wav="$HOME/.config/opencode/ref_voice_bench.wav"
-    if [ -f "$sample_wav" ]; then
-        local sample_text
-        if sample_text=$(transcribe_file "$sample_wav" "$stt_url" "$stt_model" 2>/tmp/opencode-stt-status.err); then
-            echo "  Self-test: OK — ${sample_text}"
-        else
-            echo "  Self-test: FAILED"
-            sed 's/^/    /' /tmp/opencode-stt-status.err
-        fi
-        rm -f /tmp/opencode-stt-status.err
     fi
     echo ""
 
@@ -355,9 +195,6 @@ print('  models:', ', '.join(h.get('available_models') or []))
     echo "  Interpreter: $PYTHON"
     echo "  VAD: $VAD_PY"
     echo "  TTS: $TTS_SH"
-    echo "  Codex skill: $([ -L "$HOME/.codex/skills/talk" ] && readlink "$HOME/.codex/skills/talk" || echo "not symlinked")"
-    echo "  VibeVoice helper: ${VIBEVOICE_SPEAK_PY:-$HOME/tts-multimodel-api/speak_vibevoice.py}"
-    echo "  VibeVoice WS: ${VIBEVOICE_WS_URI:-ws://127.0.0.1:8010/ws/tts}"
     echo "  Auto-listen after speak: $([ "$TALK_AUTO_LISTEN" = 1 ] && echo yes || echo no)"
     "$PYTHON" -c "
 import sounddevice as sd, torch, silero_vad
@@ -368,11 +205,7 @@ print('  silero-vad :', silero_vad.__version__)
 }
 
 cmd_devices() {
-    echo "=== Audio Input Devices ===" >&2
     "$PYTHON" "$VAD_PY" --list-devices
-    echo ""
-    echo "=== Selected Microphone (MIC_QUERY=${MIC_QUERY:-MacBook Air Microphone}) ==="
-    "$PYTHON" "$VAD_PY" --print-selected-mic --mic-query "${MIC_QUERY:-MacBook Air Microphone}" 2>&1 || echo "(selection failed)"
 }
 
 case "${1:-listen}" in

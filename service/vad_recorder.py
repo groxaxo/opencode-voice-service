@@ -121,45 +121,18 @@ def list_devices():
 def find_mic(query=None):
     """Find a suitable microphone device index.
 
-    Always prefer the MacBook Air Microphone.
-    Explicitly never select NoMachine (or other virtual/remote) adapters.
-
-    Priority:
-      1. Substring match on --mic-query (if provided), but only non-NoMachine devices.
-      2. Exact "MacBook Air Microphone" (strong built-in preference).
-      3. First non-NoMachine input device.
-      4. (last resort) first input device.
+    Priority: query match > MacBook Air Microphone > first input device.
     """
     devices = sd.query_devices()
-
-    def _is_blocked(name: str) -> bool:
-        n = name.lower()
-        return "nomachine" in n
-
-    # 1. Query match (precise), skip blocked devices
-    if query:
-        q = query.lower()
-        for i, dev in enumerate(devices):
-            if dev["max_input_channels"] <= 0:
-                continue
-            name = dev["name"]
-            if q in name.lower() and not _is_blocked(name):
-                return i
-
-    # 2. Hard preference for the built-in MacBook Air Microphone
+    for i, dev in enumerate(devices):
+        if dev["max_input_channels"] <= 0:
+            continue
+        if query and query.lower() in dev["name"].lower():
+            return i
     for i, dev in enumerate(devices):
         if dev["max_input_channels"] > 0:
-            name = dev["name"]
-            if "macbook air microphone" in name.lower() and not _is_blocked(name):
+            if "macbook air microphone" in dev["name"].lower():
                 return i
-
-    # 3. First non-blocked input device
-    for i, dev in enumerate(devices):
-        if dev["max_input_channels"] > 0:
-            if not _is_blocked(dev["name"]):
-                return i
-
-    # 4. Absolute fallback (only if no other choice)
     for i, dev in enumerate(devices):
         if dev["max_input_channels"] > 0:
             return i
@@ -340,8 +313,6 @@ def main():
                    help="Substring match for mic device name")
     p.add_argument("--list-devices", action="store_true",
                    help="List input devices and exit")
-    p.add_argument("--print-selected-mic", action="store_true",
-                   help="Print the mic that find_mic() + --mic-query would select and exit")
     p.add_argument("--debug", action="store_true",
                    help="Debug logging to stderr")
 
@@ -349,23 +320,6 @@ def main():
 
     if args.list_devices:
         list_devices()
-        sys.exit(0)
-
-    if args.print_selected_mic:
-        dev_idx = args.mic_device
-        if dev_idx is None:
-            dev_idx = find_mic(args.mic_query)
-        if dev_idx is not None:
-            try:
-                info = sd.query_devices(dev_idx)
-                name = info.get("name", "?")
-                ins = int(info.get("max_input_channels", 0))
-                sr = int(info.get("default_samplerate", 0))
-                print(f"[{dev_idx}] {name}  inputs={ins}  default_sr={sr}")
-            except Exception as e:
-                print(f"[{dev_idx}] (query error: {e})")
-        else:
-            print("No suitable input device found")
         sys.exit(0)
 
     recorder = VADRecorder(args)
