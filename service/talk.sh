@@ -52,7 +52,12 @@ export TTS_ENGINE
 # After speak finishes playback, immediately start listen (stdout = next user text)
 : "${TALK_AUTO_LISTEN:=1}"
 # Barge-in: detect user speech during TTS playback and interrupt
-: "${TALK_BARGE_IN:=1}"
+# WARNING: requires echo cancellation or careful mic placement — TTS audio
+# bleeding into the mic will trigger false interrupts. Test before enabling.
+: "${TALK_BARGE_IN:=0}"
+# Grace period (ms) before barge-in VAD activates after TTS playback starts
+# Prevents the VAD from triggering on the initial TTS audio burst
+: "${TALK_BARGE_IN_DELAY_MS:=2000}"
 # Idle timeout: exit listen if no speech detected within N seconds (0=disabled)
 : "${TALK_IDLE_TIMEOUT_S:=30}"
 # -----------------------------------------------------------------------------
@@ -212,22 +217,25 @@ cmd_speak() {
 
     if [ "${TALK_BARGE_IN}" = "1" ] && [ "${TALK_AUTO_LISTEN}" = "1" ]; then
         # Barge-in mode: generate TTS, play with background monitoring
-        _speak_with_barge_in "$text" "$lang"
-    else
-        # Simple mode: TTS generates + plays, then listen
-        TTS_ENGINE="$TTS_ENGINE" \
-        VIBEVOICE_MODEL="${VIBEVOICE_MODEL:-vibe-realtime-8bit}" \
-        VIBEVOICE_VOICE="${VIBEVOICE_VOICE:-en-Emma_woman}" \
-        VIBEVOICE_VOICE_AUTO="${VIBEVOICE_VOICE_AUTO:-1}" \
-        VIBEVOICE_CFG_SCALE="${VIBEVOICE_CFG_SCALE:-2.0}" \
-        VIBEVOICE_DDPM_STEPS="${VIBEVOICE_DDPM_STEPS:-15}" \
-        VIBEVOICE_WS_URI="${VIBEVOICE_WS_URI:-ws://127.0.0.1:8010/ws/tts}" \
-            bash "$TTS_SH" "$text" "$lang"
-
-        if [ "${TALK_AUTO_LISTEN}" = "1" ]; then
-            echo "Listening for your reply…" >&2
-            cmd_listen
+        if _speak_with_barge_in "$text" "$lang"; then
+            return 0
         fi
+        echo "[talk] Barge-in failed, falling back to simple mode" >&2
+    fi
+
+    # Simple mode: TTS generates + plays, then listen
+    TTS_ENGINE="$TTS_ENGINE" \
+    VIBEVOICE_MODEL="${VIBEVOICE_MODEL:-vibe-realtime-8bit}" \
+    VIBEVOICE_VOICE="${VIBEVOICE_VOICE:-en-Emma_woman}" \
+    VIBEVOICE_VOICE_AUTO="${VIBEVOICE_VOICE_AUTO:-1}" \
+    VIBEVOICE_CFG_SCALE="${VIBEVOICE_CFG_SCALE:-2.0}" \
+    VIBEVOICE_DDPM_STEPS="${VIBEVOICE_DDPM_STEPS:-15}" \
+    VIBEVOICE_WS_URI="${VIBEVOICE_WS_URI:-ws://127.0.0.1:8010/ws/tts}" \
+        bash "$TTS_SH" "$text" "$lang"
+
+    if [ "${TALK_AUTO_LISTEN}" = "1" ]; then
+        echo "Listening for your reply…" >&2
+        cmd_listen
     fi
 }
 
@@ -265,6 +273,7 @@ _speak_with_barge_in() {
     barge_result=$("$PYTHON" "$VAD_PY" --barge-in \
         --mic-query "$MIC_QUERY" \
         --vad-threshold "$VAD_THRESHOLD" \
+        --ready-delay-ms "${TALK_BARGE_IN_DELAY_MS:-2000}" \
         --idle-timeout-s "0" \
         2>/dev/null) &
     local vad_pid=$!
