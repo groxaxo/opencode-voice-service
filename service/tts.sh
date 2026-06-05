@@ -1,7 +1,7 @@
 #!/bin/bash
 # tts.sh — Multi-engine TTS CLI for OpenCode / talk skill.
 #
-# Engines: neutts (default), xai, vibevoice, supertonic.
+# Engines: neutts (default), xai, supertonic.
 # Set TTS_ENGINE to override. macOS say is intentionally not available.
 
 set -e
@@ -11,20 +11,10 @@ set -e
 : "${XAI_API_KEY:=${XAI_API_KEY:-}}"
 : "${XAI_TTS_VOICE:=eve}"
 : "${XAI_TTS_MODEL:=grok-2-audio}"
-: "${VIBEVOICE_WS_URI:=ws://127.0.0.1:8010/ws/tts}"
-: "${VIBEVOICE_MODEL:=vibe-realtime-8bit}"
-: "${VIBEVOICE_VOICE:=en-Emma_woman}"
-: "${VIBEVOICE_VOICE_AUTO:=1}"
-: "${VIBEVOICE_CFG_SCALE:=2.0}"
-: "${VIBEVOICE_DDPM_STEPS:=15}"
-: "${VIBEVOICE_SPEAK_PY:=$HOME/tts-multimodel-api/speak_vibevoice.py}"
 : "${SUPERTONIC_URL:=http://127.0.0.1:8765}"
 : "${SUPERTONIC_SH:=$HOME/.config/opencode/skills/supertonic-tts/supertonic.sh}"
 : "${NEUTTS_URL:=http://127.0.0.1:8020}"
-# NeuTTS model selection by language — must match NEUTTS_PRELOAD_MODELS
-# to avoid lazy loading. Server preloads: q4-gguf (EN) + spanish-q4-gguf (ES)
-: "${NEUTTS_MODEL:=neuphonic/neutts-nano-q4-gguf}"
-: "${NEUTTS_MODEL_ES:=neuphonic/neutts-nano-spanish-q4-gguf}"
+: "${NEUTTS_MODEL:=neuphonic/neutts-nano-q8-gguf}"
 # -----------------------------------------------------------------------------
 
 # shellcheck source=tts_lang.sh
@@ -34,7 +24,6 @@ TEXT="${1:-Hello.}"
 OUTPUT="/tmp/opencode-speech.wav"
 LANG="$(resolve_lang "${2:-}" "$TEXT")"
 
-# If TTS_NO_PLAY=1, generate the WAV but don't play it (let caller handle playback)
 : "${TTS_NO_PLAY:=0}"
 
 speak_neutts() {
@@ -42,9 +31,10 @@ speak_neutts() {
     local lang="$2"
     local model="$NEUTTS_MODEL"
 
-    # Select preloaded model by language to avoid lazy loading
     case "$lang" in
-        es*)  model="${NEUTTS_MODEL_ES}" ;;
+        es*)  model="neuphonic/neutts-nano-spanish-q8-gguf" ;;
+        de*)  model="neuphonic/neutts-nano-german-q8-gguf" ;;
+        fr*)  model="neuphonic/neutts-nano-french-q8-gguf" ;;
         en*|*) model="${NEUTTS_MODEL}" ;;
     esac
 
@@ -123,36 +113,6 @@ speak_xai() {
     rm -f "$OUTPUT"
 }
 
-speak_vibevoice() {
-    local text="$1"
-    local lang="$2"
-    local py="${HOME}/tts-multimodel-api/venv/bin/python3"
-    [ -x "$py" ] || py="${HOME}/.config/opencode/tts-venv/bin/python3"
-    [ -x "$py" ] || py="python3"
-
-    if [ ! -f "$VIBEVOICE_SPEAK_PY" ]; then
-        echo "tts.sh: VibeVoice helper not found: $VIBEVOICE_SPEAK_PY" >&2
-        return 1
-    fi
-
-    local voice
-    voice="$(resolve_vibevoice_voice "$lang")"
-    echo "[tts] VibeVoice lang=${lang} voice=${voice} (auto=${VIBEVOICE_VOICE_AUTO:-0})" >&2
-
-    "$py" "$VIBEVOICE_SPEAK_PY" "$text" "$OUTPUT" \
-        --uri "$VIBEVOICE_WS_URI" \
-        --model "$VIBEVOICE_MODEL" \
-        --language "$lang" \
-        --voice "$voice" \
-        --cfg-scale "$VIBEVOICE_CFG_SCALE" \
-        --ddpm-steps "$VIBEVOICE_DDPM_STEPS" >/dev/null
-
-    [ -f "$OUTPUT" ] || { echo "tts.sh: VibeVoice produced no wav" >&2; return 1; }
-    [ "$TTS_NO_PLAY" = "1" ] && { echo "$OUTPUT"; return 0; }
-    afplay "$OUTPUT"
-    rm -f "$OUTPUT"
-}
-
 speak_supertonic() {
     local text="$1"
     local lang="$2"
@@ -211,17 +171,8 @@ case "$engine" in
         if speak_xai "$TEXT" "$LANG"; then exit 0; fi
         echo "[tts] xAI failed, trying NeuTTS fallback…" >&2
         if speak_neutts "$TEXT" "$LANG"; then exit 0; fi
-        echo "[tts] NeuTTS failed, trying VibeVoice…" >&2
-        if speak_vibevoice "$TEXT" "$LANG"; then exit 0; fi
-        echo "tts.sh: all TTS engines failed; no macOS say fallback is available" >&2
-        exit 1
-        ;;
-    vibevoice|vibe|mlx-vibe)
-        if speak_vibevoice "$TEXT" "$LANG"; then exit 0; fi
-        echo "[tts] VibeVoice failed, trying NeuTTS fallback…" >&2
-        if speak_neutts "$TEXT" "$LANG"; then exit 0; fi
-        echo "[tts] NeuTTS failed, trying xAI…" >&2
-        if speak_xai "$TEXT" "$LANG"; then exit 0; fi
+        echo "[tts] NeuTTS failed, trying Supertonic…" >&2
+        if speak_supertonic "$TEXT" "$LANG"; then exit 0; fi
         echo "tts.sh: all TTS engines failed; no macOS say fallback is available" >&2
         exit 1
         ;;
@@ -235,7 +186,7 @@ case "$engine" in
         exit 1
         ;;
     *)
-        echo "tts.sh: unknown TTS_ENGINE=${TTS_ENGINE}. Use: neutts, xai, vibevoice, supertonic." >&2
+        echo "tts.sh: unknown TTS_ENGINE=${TTS_ENGINE}. Use: neutts, xai, supertonic." >&2
         exit 2
         ;;
 esac

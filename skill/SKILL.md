@@ -14,7 +14,7 @@ Load in OpenCode via `skill("talk")`. Codex uses the same skill at `~/.codex/ski
 
 **Default STT:** local Parakeet CoreML [`FluidInference/parakeet-tdt-0.6b-v3-coreml`](https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v3-coreml) via `speech-server` on `127.0.0.1:5093` (ANE, offline).
 
-**Default TTS:** **NeuTTS** (Neuphonic, local llama-cpp GGUF, `:8020`, launchd `com.op.neutts-server`). Preloads EN+ES Q4 models at boot (~1.4 GB RSS). Falls back to **xAI** (`api.x.ai`, voice `eve`, model `grok-2-audio`) if NeuTTS fails. Also supports **Supertonic** (local CoreML, `:8765`, `TTS_ENGINE=supertonic`). macOS `say` is intentionally disabled — not available as fallback. Requires `XAI_API_KEY` env var for xAI fallback.
+**Default TTS:** **NeuTTS** (Neuphonic, local llama-cpp GGUF, `:8020`, launchd `com.op.neutts-server`). Lazy-loads Q8 models on first request, evicts after 5 min idle (~0.5 GB baseline). Falls back to **xAI** (`api.x.ai`, voice `eve`, model `grok-2-audio`) if NeuTTS fails. Also supports **Supertonic** (local CoreML, `:8765`, `TTS_ENGINE=supertonic`) as last-resort fallback. macOS `say` is intentionally disabled. Requires `XAI_API_KEY` env var for xAI fallback.
 
 **Fallback chains:** NeuTTS→xAI→Supertonic | xAI→NeuTTS→VibeVoice→Supertonic | VibeVoice→NeuTTS→xAI→Supertonic | Supertonic→NeuTTS→xAI→Supertonic. All engines try to recover before failing.
 
@@ -78,7 +78,7 @@ This pipelines conversation: the user can start talking again while you prepare 
 | `NEUTTS_MODEL` | `neuphonic/neutts-nano-q4-gguf` | Default backbone (EN) |
 | `NEUTTS_MODEL_ES` | `neuphonic/neutts-nano-spanish-q4-gguf` | Spanish backbone |
 | `NEUTTS_PORT` | `8020` | NeuTTS server port |
-| `NEUTTS_PRELOAD_MODELS` | `neuphonic/neutts-nano-q4-gguf neuphonic/neutts-nano-spanish-q4-gguf` | Space-separated models to preload at boot (NO lazy loading) |
+| `NEUTTS_PRELOAD_MODELS` | `` (all lazy by default) | Space-separated models to preload at boot (empty = lazy) |
 | `TALK_READY_CUE` | 1 | Play a short tone before `listen` (set `0` to disable) |
 | `TALK_READY_SOUND` | Tink.aiff | macOS system sound for ready cue |
 | `TALK_READY_DELAY_MS` | 400 | Ignore mic after cue so speech is not clipped |
