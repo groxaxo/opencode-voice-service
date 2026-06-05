@@ -15,6 +15,9 @@ set -e
 : "${SUPERTONIC_SH:=$HOME/.config/opencode/skills/supertonic-tts/supertonic.sh}"
 : "${NEUTTS_URL:=http://127.0.0.1:8020}"
 : "${NEUTTS_MODEL:=neuphonic/neutts-nano-q8-gguf}"
+: "${NEUTTS_MODEL_ES:=neuphonic/neutts-nano-spanish-q8-gguf}"
+: "${NEUTTS_MODEL_DE:=neuphonic/neutts-nano-german-q8-gguf}"
+: "${NEUTTS_MODEL_FR:=neuphonic/neutts-nano-french-q8-gguf}"
 # -----------------------------------------------------------------------------
 
 # shellcheck source=tts_lang.sh
@@ -32,9 +35,9 @@ speak_neutts() {
     local model="$NEUTTS_MODEL"
 
     case "$lang" in
-        es*)  model="neuphonic/neutts-nano-spanish-q8-gguf" ;;
-        de*)  model="neuphonic/neutts-nano-german-q8-gguf" ;;
-        fr*)  model="neuphonic/neutts-nano-french-q8-gguf" ;;
+        es*)  model="${NEUTTS_MODEL_ES}" ;;
+        de*)  model="${NEUTTS_MODEL_DE}" ;;
+        fr*)  model="${NEUTTS_MODEL_FR}" ;;
         en*|*) model="${NEUTTS_MODEL}" ;;
     esac
 

@@ -75,10 +75,12 @@ This pipelines conversation: the user can start talking again while you prepare 
 | `XAI_TTS_VOICE` | `eve` | xAI voice: `ara`, `eve`, `leo`, `rex`, `sal` |
 | `XAI_TTS_MODEL` | `grok-2-audio` | xAI model for speech |
 | `NEUTTS_URL` | `http://127.0.0.1:8020` | NeuTTS server |
-| `NEUTTS_MODEL` | `neuphonic/neutts-nano-q4-gguf` | Default backbone (EN) |
-| `NEUTTS_MODEL_ES` | `neuphonic/neutts-nano-spanish-q4-gguf` | Spanish backbone |
+| `NEUTTS_MODEL` | `neuphonic/neutts-nano-q8-gguf` | Default backbone (EN) |
+| `NEUTTS_MODEL_ES` | `neuphonic/neutts-nano-spanish-q8-gguf` | Spanish backbone |
+| `NEUTTS_MODEL_DE` | `neuphonic/neutts-nano-german-q8-gguf` | German backbone |
+| `NEUTTS_MODEL_FR` | `neuphonic/neutts-nano-french-q8-gguf` | French backbone |
 | `NEUTTS_PORT` | `8020` | NeuTTS server port |
-| `NEUTTS_PRELOAD_MODELS` | `` (all lazy by default) | Space-separated models to preload at boot (empty = lazy) |
+| `NEUTTS_PRELOAD_MODELS` | `neuphonic/neutts-nano-q8-gguf neuphonic/neutts-nano-spanish-q8-gguf` | Space-separated models to preload at boot (NO lazy loading) |
 | `TALK_READY_CUE` | 1 | Play a short tone before `listen` (set `0` to disable) |
 | `TALK_READY_SOUND` | Tink.aiff | macOS system sound for ready cue |
 | `TALK_READY_DELAY_MS` | 400 | Ignore mic after cue so speech is not clipped |
