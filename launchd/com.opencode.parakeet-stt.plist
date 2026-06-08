@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd plist for Parakeet STT server (ONNX Runtime).
+  Autostarts on login and survives reboots.
+
+  Template file — HOME_PLACEHOLDER substituted by setup.sh.
+  Default port: 5093 (set PARAKEET_PORT env var to override).
+
+  Install:
+    launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.opencode.parakeet-stt.plist
+
+  Check:
+    launchctl list | grep opencode.parakeet
+    tail -f ~/.config/opencode/parakeet-stt.log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.opencode.parakeet-stt</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>HOME_PLACEHOLDER/.config/opencode/parakeet-stt/.venv/bin/python</string>
+        <string>HOME_PLACEHOLDER/.config/opencode/parakeet-stt/server.py</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>HOME_PLACEHOLDER</string>
+        <key>PATH</key>
+        <string>HOME_PLACEHOLDER/.config/opencode/parakeet-stt/.venv/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>PARAKEET_PORT</key>
+        <string>5093</string>
+        <key>PARAKEET_USE_GPU</key>
+        <string>false</string>
+        <key>PARAKEET_DEFAULT_MODEL</key>
+        <string>parakeet-tdt-0.6b-v3</string>
+        <key>PARAKEET_BATCHED</key>
+        <string>0</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>HOME_PLACEHOLDER/.config/opencode/parakeet-stt.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>HOME_PLACEHOLDER/.config/opencode/parakeet-stt.log</string>
+
+    <key>WorkingDirectory</key>
+    <string>HOME_PLACEHOLDER/.config/opencode/parakeet-stt</string>
+
+    <key>ProcessType</key>
+    <string>Standard</string>
+
+    <key>Nice</key>
+    <integer>0</integer>
+</dict>
+</plist>

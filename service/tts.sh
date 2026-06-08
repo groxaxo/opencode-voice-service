@@ -11,7 +11,7 @@ set -e
 : "${XAI_API_KEY:=${XAI_API_KEY:-}}"
 : "${XAI_TTS_VOICE:=eve}"
 : "${XAI_TTS_MODEL:=grok-2-audio}"
-: "${SUPERTONIC_URL:=http://127.0.0.1:8765}"
+: "${SUPERTONIC_URL:=http://127.0.0.1:8766}"
 : "${SUPERTONIC_SH:=$HOME/.config/opencode/skills/supertonic-tts/supertonic.sh}"
 : "${NEUTTS_URL:=http://127.0.0.1:8020}"
 : "${NEUTTS_MODEL:=neuphonic/neutts-nano-q8-gguf}"

@@ -1,8 +1,8 @@
 ---
 name: talk
 description: >-
-  Orchestrates VAD-driven voice conversation (Silero listen, Parakeet STT,
-  NeuTTS default with xAI cloud fallback). Use when the user says talk,
+  Orchestrates VAD-driven voice conversation (Silero listen, Parakeet ONNX STT,
+  Supertonic ONNX TTS with xAI cloud fallback). Use when the user says talk,
   voice, speak, habla, voz, audio, talk mode, or wants spoken back-and-forth.
   Also when they ask to read a reply aloud (say it, speak that). Triggers on voice,
   talk, speak, habla, audio, tts, stt.
@@ -12,13 +12,16 @@ description: >-
 
 Load in OpenCode via `skill("talk")`. Codex uses the same skill at `~/.codex/skills/talk` (symlink).
 
-**Default STT:** local Parakeet CoreML [`FluidInference/parakeet-tdt-0.6b-v3-coreml`](https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v3-coreml) via `speech-server` on `127.0.0.1:5093` (ANE, offline).
+**Default STT:** local Parakeet ONNX via `parakeet-tdt-0.6b-v3-fastapi-openai` on `127.0.0.1:5093` (auto-installed by `setup.sh`). OpenAI-compatible API, 25 languages, ~20x real-time on Apple Silicon.
 
-**Default TTS:** **NeuTTS** (Neuphonic, local llama-cpp GGUF, `:8020`, launchd `com.op.neutts-server`). Lazy-loads Q8 models on first request, evicts after 5 min idle (~0.5 GB baseline). Falls back to **xAI** (`api.x.ai`, voice `eve`, model `grok-2-audio`) if NeuTTS fails. Also supports **Supertonic** (local CoreML, `:8765`, `TTS_ENGINE=supertonic`) as last-resort fallback. macOS `say` is intentionally disabled. Requires `XAI_API_KEY` env var for xAI fallback.
+**Default TTS:** **Supertonic ONNX** via `supertonic-express` on `:8766` (auto-installed by `setup.sh`). Falls back to **NeuTTS** (local GGUF, `:8020`) then **xAI** (cloud, `api.x.ai`, voice `eve`). macOS `say` is intentionally disabled. All engines have automatic fallback chains.
 
-**Fallback chains:** NeuTTS→xAI→Supertonic | xAI→NeuTTS→VibeVoice→Supertonic | VibeVoice→NeuTTS→xAI→Supertonic | Supertonic→NeuTTS→xAI→Supertonic. All engines try to recover before failing.
+> **Port note:** Supertonic defaults to `:8766` (not `:8765`) so it can coexist
+> with the existing Chatterbox TTS server on `:8765`. If a precompiled
+> `speech-server` already runs on `:5093` for STT, setup.sh detects it and
+> leaves the existing Parakeet plist untouched.
 
-**Barge-in:** During TTS playback, the mic is monitored via VAD. If the user starts speaking, playback is interrupted and the system switches to listening. Controlled by `TALK_BARGE_IN` (default: 1).
+**Barge-in:** During TTS playback, the mic is monitored via VAD. If the user starts speaking, playback is interrupted and the system switches to listening. Controlled by `TALK_BARGE_IN` (default: 0 — opt-in, requires `TALK_BARGE_IN=1`). WARNING: requires echo cancellation or careful mic placement — TTS audio bleeding into the mic will trigger false interrupts. Test before enabling.
 
 ## Paths
 
@@ -33,8 +36,8 @@ Load in OpenCode via `skill("talk")`. Codex uses the same skill at `~/.codex/ski
 
 ```bash
 ~/.config/opencode/skills/talk/talk.sh listen    # block until user stops; print transcript
-~/.config/opencode/skills/talk/talk.sh speak "…" # TTS (NeuTTS default → xAI fallback)
-~/.config/opencode/skills/talk/talk.sh status    # health check
+~/.config/opencode/skills/talk/talk.sh speak "…" # TTS (Supertonic local default → NeuTTS → xAI)
+~/.config/opencode/skills/talk/talk.sh status    # health check (all backends)
 ~/.config/opencode/skills/talk/talk.sh devices   # list mics
 ~/.config/opencode/skills/talk/talk.sh loop      # continuous loop (tty or pipe stdin)
 ```
@@ -48,59 +51,47 @@ When the user enters talk/voice mode:
 3. **Speak + listen** — `talk.sh speak '<reply>'` (escape single quotes). This plays TTS, then **opens the mic immediately** when audio ends. **Stdout = the user's next utterance** (same as `listen`).
 4. **Loop** — Go to step 2 with the text from step 3. **Do not call `listen` separately** after `speak` (it is built in).
 
-This pipelines conversation: the user can start talking again while you prepare the next LLM request, because recording begins the moment your reply finishes playing.
-
 ### Idle timeout
 
-`listen` exits cleanly with empty stdout after `TALK_IDLE_TIMEOUT_S` seconds (default: 30) if no speech is detected. This prevents indefinite blocking. Set `TALK_IDLE_TIMEOUT_S=0` to disable.
+`listen` exits cleanly with empty stdout after `TALK_IDLE_TIMEOUT_S` seconds (default: 30) if no speech is detected.
 
 ### Rules
 
 - Always invoke `talk.sh` via Shell; never fake transcription or audio.
 - Empty stdout from `speak` (no speech detected) → `talk.sh listen` once, then continue.
 - One-off read-aloud only (no mic): `TALK_AUTO_LISTEN=0 talk.sh speak '…'`.
-- TTS down (all engines failed) → fix NeuTTS/xAI; do not use macOS `say`.
+- TTS down (all engines failed) → fix backends; do not use macOS `say`.
 - First session turn: `talk.sh status` if services were recently restarted.
 
 ## Environment
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `STT_ENGINE` | `coreml` | `coreml` or `remote`; both default to local `127.0.0.1:5093` |
-| `STT_URL` | `http://127.0.0.1:5093/v1/audio/transcriptions` | Local CoreML STT |
-| `STT_MODEL` | `FluidInference/parakeet-tdt-0.6b-v3-coreml` | Model id for API |
-| `STT_TIMEOUT_SECONDS` | `45` | Curl timeout for one STT request |
-| `TTS_ENGINE` | `neutts` | `neutts` (default), `xai`, `vibevoice`, `supertonic` |
-| `XAI_API_KEY` | (required) | API key for xAI TTS |
+| `STT_ENGINE` | `coreml` | STT backend (local Parakeet ONNX `:5093`) |
+| `STT_URL` | `http://127.0.0.1:5093/v1/audio/transcriptions` | Parakeet ONNX endpoint |
+| `TTS_ENGINE` | `supertonic` | `supertonic` (local ONNX), `neutts` (local GGUF), `xai` (cloud) |
+| `SUPERTONIC_URL` | `http://127.0.0.1:8766` | Supertonic TTS endpoint (auto-installed) |
+| `XAI_API_KEY` | (required) | API key for xAI TTS fallback |
 | `XAI_TTS_VOICE` | `eve` | xAI voice: `ara`, `eve`, `leo`, `rex`, `sal` |
-| `XAI_TTS_MODEL` | `grok-2-audio` | xAI model for speech |
-| `NEUTTS_URL` | `http://127.0.0.1:8020` | NeuTTS server |
-| `NEUTTS_MODEL` | `neuphonic/neutts-nano-q8-gguf` | Default backbone (EN) |
-| `NEUTTS_MODEL_ES` | `neuphonic/neutts-nano-spanish-q8-gguf` | Spanish backbone |
-| `NEUTTS_MODEL_DE` | `neuphonic/neutts-nano-german-q8-gguf` | German backbone |
-| `NEUTTS_MODEL_FR` | `neuphonic/neutts-nano-french-q8-gguf` | French backbone |
-| `NEUTTS_PORT` | `8020` | NeuTTS server port |
-| `NEUTTS_PRELOAD_MODELS` | `neuphonic/neutts-nano-q8-gguf neuphonic/neutts-nano-spanish-q8-gguf` | Space-separated models to preload at boot (NO lazy loading) |
-| `TALK_READY_CUE` | 1 | Play a short tone before `listen` (set `0` to disable) |
+| `TALK_READY_CUE` | 1 | Play a short tone before `listen` |
 | `TALK_READY_SOUND` | Tink.aiff | macOS system sound for ready cue |
-| `TALK_READY_DELAY_MS` | 400 | Ignore mic after cue so speech is not clipped |
+| `TALK_READY_DELAY_MS` | 700 | Ignore mic after cue |
 | `VAD_THRESHOLD` | 0.5 | Lower = more sensitive |
 | `VAD_MIN_SILENCE_MS` | 500 | End-of-turn silence |
 | `MIC_QUERY` | MacBook Air Microphone | Substring to select the mic |
-| `TALK_AUTO_LISTEN` | `1` | After `speak`, run `listen` and print next user text on stdout |
-| `TALK_BARGE_IN` | `1` | Detect and interrupt TTS playback when user starts speaking |
-| `TALK_IDLE_TIMEOUT_S` | `30` | Exit listen if no speech within N seconds (0=disabled) |
+| `TALK_AUTO_LISTEN` | `1` | After `speak`, run `listen` |
+| `TALK_BARGE_IN` | `0` | Interrupt TTS on speech (opt-in) |
+| `TALK_IDLE_TIMEOUT_S` | `30` | Exit listen if no speech (0=disabled) |
 
 ## Troubleshooting
 
 | Problem | Action |
 |---------|--------|
-| No transcription | `talk.sh status` — includes a real WAV transcription self-test; if failed, `launchctl kickstart -k gui/$UID/com.opencode.parakeet-stt` |
-| Force alternate STT | Override `STT_URL` or `STT_REMOTE_URL`; default remains local `:5093` |
+| No transcription | `talk.sh status` — check Parakeet ONNX on `:5093`. `launchctl kickstart -k gui/$UID/com.opencode.parakeet-stt` |
+| No TTS (Supertonic) | `talk.sh status` — check Supertonic ONNX on `:8766`. `launchctl kickstart -k gui/$UID/com.opencode.supertonic` |
 | VAD misses speech | `talk.sh devices`; lower `VAD_THRESHOLD` |
-| Wrong microphone (e.g. NoMachine) | `talk.sh devices`; set `MIC_QUERY="MacBook Air Microphone"` |
-| xAI TTS fails | Check `XAI_API_KEY` is set; `talk.sh status` shows key status, then NeuTTS is tried automatically |
-| No NeuTTS speech | `talk.sh status` — API on :8020? `launchctl kickstart -k gui/$UID/com.op.neutts-server` |
-| Listen blocks forever | Set `TALK_IDLE_TIMEOUT_S` (default 30s); check that mic is working with `talk.sh devices` |
-| All TTS failed | Fix NeuTTS or xAI; macOS `say` is intentionally not used |
-| Barge-in false triggers | Raise `VAD_THRESHOLD` (default 0.5); or set `TALK_BARGE_IN=0` to disable |
+| Wrong microphone | `talk.sh devices`; set `MIC_QUERY="MacBook Air Microphone"` |
+| xAI TTS fails | Check `XAI_API_KEY` is set; `talk.sh status` shows key status |
+| Listen blocks forever | Set `TALK_IDLE_TIMEOUT_S` (default 30s) |
+| All TTS failed | Fix backends; macOS `say` is intentionally not used |
+| Backends not running | Rerun `./setup.sh` to re-clone and re-install |

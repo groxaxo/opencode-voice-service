@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd plist for Supertonic TTS server (ONNX Runtime).
+  Autostarts on login and survives reboots.
+
+  Template file — HOME_PLACEHOLDER substituted by setup.sh.
+  Default port: 8766 (set SUPERTONIC_PORT env var to override).
+  Note: 8765 is reserved for the existing Chatterbox TTS server
+  (com.opencode.tts-server). Supertonic uses a different label, so
+  both services can coexist on different ports.
+
+  Install:
+    launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.opencode.supertonic.plist
+
+  Check:
+    launchctl list | grep opencode.supertonic
+    tail -f ~/.config/opencode/supertonic.log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.opencode.supertonic</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>HOME_PLACEHOLDER/.config/opencode/supertonic-tts/.venv/bin/python</string>
+        <string>-m</string>
+        <string>uvicorn</string>
+        <string>api.src.main:app</string>
+        <string>--host</string>
+        <string>0.0.0.0</string>
+        <string>--port</string>
+        <string>8766</string>
+        <string>--app-dir</string>
+        <string>HOME_PLACEHOLDER/.config/opencode/supertonic-tts/py</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>HOME_PLACEHOLDER</string>
+        <key>PATH</key>
+        <string>HOME_PLACEHOLDER/.config/opencode/supertonic-tts/.venv/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>ONNX_DIR</key>
+        <string>HOME_PLACEHOLDER/.config/opencode/supertonic-tts/assets</string>
+        <key>VOICE_STYLES_DIR</key>
+        <string>HOME_PLACEHOLDER/.config/opencode/supertonic-tts/assets</string>
+        <key>USE_GPU</key>
+        <string>false</string>
+        <key>LOG_LEVEL</key>
+        <string>INFO</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>HOME_PLACEHOLDER/.config/opencode/supertonic.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>HOME_PLACEHOLDER/.config/opencode/supertonic.log</string>
+
+    <key>WorkingDirectory</key>
+    <string>HOME_PLACEHOLDER/.config/opencode/supertonic-tts</string>
+
+    <key>ProcessType</key>
+    <string>Standard</string>
+
+    <key>Nice</key>
+    <integer>0</integer>
+</dict>
+</plist>

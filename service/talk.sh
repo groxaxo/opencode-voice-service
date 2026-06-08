@@ -24,8 +24,10 @@ SERVICE_DIR="$(cd "$(dirname "$0")" && pwd)"
 # --- Configurable settings ---------------------------------------------------
 # Python env (tts-venv with silero-vad, sounddevice, onnxruntime, torch)
 : "${PYTHON:=}"  # auto-detect below
-# TTS (NeuTTS default, xAI/VibeVoice/Supertonic fallback)
-: "${TTS_ENGINE:=xai}"
+# TTS (Supertonic local default, NeuTTS → xAI cloud fallback chain)
+# Supertonic is auto-installed by setup.sh on :8766 (or :8765 if forced).
+# Fallback to NeuTTS (local GGUF, :8020) then xAI (cloud, requires XAI_API_KEY).
+: "${TTS_ENGINE:=supertonic}"
 : "${XAI_TTS_VOICE:=rex}"
 : "${VIBEVOICE_MODEL:=vibe-realtime-8bit}"
 : "${VIBEVOICE_VOICE:=en-Emma_woman}"
@@ -423,7 +425,7 @@ cmd_status() {
         echo "  CFG scale: ${VIBEVOICE_CFG_SCALE:-2.0}"
         echo "  DDPM steps: ${VIBEVOICE_DDPM_STEPS:-15}"
     elif [ "$TTS_ENGINE" = "supertonic" ] || [ "$TTS_ENGINE" = "coreml-tts" ]; then
-        echo "  Supertonic URL: ${SUPERTONIC_URL:-http://127.0.0.1:8765}"
+        echo "  Supertonic URL: ${SUPERTONIC_URL:-http://127.0.0.1:8766}"
         echo "  Supertonic voice: ${SUPERTONIC_VOICE_STYLE:-voice_styles/F4.json}"
         echo "  Compute: ${SUPERTONIC_COMPUTE_UNITS:-CPU_AND_NE}"
     fi
