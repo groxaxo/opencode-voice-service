@@ -21,6 +21,32 @@ set -e
 
 SERVICE_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Cross-platform WAV playback
+# macOS: afplay | Linux: ffplay > aplay > paplay > cvlc > mpv
+play_wav() {
+    local f="$1"
+    [ -f "$f" ] || return 1
+    case "$(uname -s 2>/dev/null)" in
+        Darwin)
+            afplay "$f" ;;
+        *)
+            if command -v ffplay &>/dev/null; then
+                ffplay -nodisp -autoexit -loglevel quiet "$f" 2>/dev/null
+            elif command -v aplay &>/dev/null; then
+                aplay -q "$f" 2>/dev/null
+            elif command -v paplay &>/dev/null; then
+                paplay "$f" 2>/dev/null
+            elif command -v cvlc &>/dev/null; then
+                cvlc --play-and-exit --no-video "$f" 2>/dev/null
+            elif command -v mpv &>/dev/null; then
+                mpv --no-video --quiet "$f" 2>/dev/null
+            else
+                echo "[talk] No audio player found (install ffmpeg for ffplay)" >&2
+                return 1
+            fi ;;
+    esac
+}
+
 # --- Configurable settings ---------------------------------------------------
 # Python env (tts-venv with silero-vad, sounddevice, onnxruntime, torch)
 : "${PYTHON:=}"  # auto-detect below
@@ -47,9 +73,10 @@ export TTS_ENGINE
 # Mic device selection
 # Default targets the built-in mic and the find_mic() logic explicitly
 # excludes "nomachine" (and other virtual adapters).
-: "${MIC_QUERY:=MacBook Air Microphone}"
+: "${MIC_QUERY:=}"  # empty = auto-detect best mic; set to substring like "MacBook Air" or "Headset"
 # Ready cue before listen (short tone so user knows when to speak)
 : "${TALK_READY_CUE:=1}"
+# macOS system sound — on Linux/Windows the file won't exist and we fall back to \a beep
 : "${TALK_READY_SOUND:=/System/Library/Sounds/Tink.aiff}"
 : "${TALK_READY_DELAY_MS:=700}"
 # After speak finishes playback, immediately start listen (stdout = next user text)
@@ -161,7 +188,7 @@ detect_lang() {
 cmd_ready_cue() {
     [ "${TALK_READY_CUE}" = "0" ] && return 0
     if [ -f "$TALK_READY_SOUND" ]; then
-        afplay "$TALK_READY_SOUND" 2>/dev/null || printf '\a'
+        play_wav "$TALK_READY_SOUND" 2>/dev/null || printf '\a'
     else
         printf '\a'
     fi
@@ -283,7 +310,7 @@ _speak_with_barge_in() {
     fi
 
     # Step 2: Start playback in background
-    afplay "$wav_file" &
+    play_wav "$wav_file" &
     local play_pid=$!
 
     # Step 3: Start barge-in VAD monitor in parallel

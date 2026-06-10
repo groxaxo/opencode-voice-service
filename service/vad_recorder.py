@@ -131,24 +131,26 @@ def list_devices():
 
 
 def find_mic(query=None):
-    """Find a suitable microphone device index.
+    """Find a suitable microphone device index (cross-platform).
 
-    Always prefer the MacBook Air Microphone.
-    Explicitly never select NoMachine (or other virtual/remote) adapters.
+    Never selects virtual/remote audio adapters (NoMachine, VirtualBox, VMware).
 
     Priority:
-      1. Substring match on --mic-query (if provided), but only non-NoMachine devices.
-      2. Exact "MacBook Air Microphone" (strong built-in preference).
-      3. First non-NoMachine input device.
-      4. (last resort) first input device.
+      1. Substring match on --mic-query (if provided), skipping blocked devices.
+      2. Platform default: MacBook Air Microphone (macOS), or first non-blocked device.
+      3. First non-blocked input device.
+      4. Absolute fallback: first input device of any kind.
     """
+    import platform as _platform
     devices = sd.query_devices()
+
+    _BLOCKED = ("nomachine", "virtualbox", "vmware", "virtual audio", "vb-audio")
 
     def _is_blocked(name: str) -> bool:
         n = name.lower()
-        return "nomachine" in n
+        return any(b in n for b in _BLOCKED)
 
-    # 1. Query match (precise), skip blocked devices
+    # 1. Query match, skip blocked devices
     if query:
         q = query.lower()
         for i, dev in enumerate(devices):
@@ -158,20 +160,21 @@ def find_mic(query=None):
             if q in name.lower() and not _is_blocked(name):
                 return i
 
-    # 2. Hard preference for the built-in MacBook Air Microphone
-    for i, dev in enumerate(devices):
-        if dev["max_input_channels"] > 0:
-            name = dev["name"]
-            if "macbook air microphone" in name.lower() and not _is_blocked(name):
-                return i
+    # 2. macOS: prefer built-in MacBook microphone
+    if _platform.system() == "Darwin":
+        for i, dev in enumerate(devices):
+            if dev["max_input_channels"] > 0:
+                name = dev["name"]
+                if "macbook" in name.lower() and "microphone" in name.lower() and not _is_blocked(name):
+                    return i
 
-    # 3. First non-blocked input device
+    # 3. First non-blocked input device (works on Linux, Windows, macOS)
     for i, dev in enumerate(devices):
         if dev["max_input_channels"] > 0:
             if not _is_blocked(dev["name"]):
                 return i
 
-    # 4. Absolute fallback (only if no other choice)
+    # 4. Absolute fallback
     for i, dev in enumerate(devices):
         if dev["max_input_channels"] > 0:
             return i

@@ -1,78 +1,153 @@
 # OpenCode Voice Service
 
-**Silero VAD-driven voice conversation for OpenCode.** One-command setup installs the entire voice pipeline: VAD, local ONNX STT (Parakeet), and local ONNX TTS (Supertonic) — all with launchd auto-start.
+**Local voice conversation for AI agents — 100% CPU-only, no GPU required.**  
+One-command setup installs the full voice pipeline: [Silero VAD](https://github.com/snakers4/silero-vad) for speech detection, [Parakeet TDT 0.6B](https://github.com/groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai) for ONNX transcription, and [Supertonic TTS 2](https://github.com/groxaxo/supertonic-express) for ONNX synthesis — **all running locally on CPU, no cloud required**.
+
+Works out of the box with **Claude Code**, **OpenCode CLI**, **OpenClaw**, **Hermes Agent**, and **Codex**.
+
+## Why CPU-only?
+
+> **You don't need a GPU to get great voice performance.**
+
+All three engines in this stack are designed for CPU inference:
+
+| Engine | Runtime | CPU latency | Size |
+|--------|---------|-------------|------|
+| **Silero VAD** | ONNX (PyTorch) | ~5ms/frame on any CPU | 1.8MB |
+| **Parakeet TDT 0.6B** | ONNX INT8 | ~200–500ms on modern CPU | ~300MB |
+| **Supertonic TTS 2** | ONNX (quantized) | ~100–500ms on modern CPU | ~500MB |
+
+The VAD and ONNX stack are optimized for Intel, AMD, and Apple Silicon CPUs. No CUDA, no ROCm, no GPU dependencies of any kind. The stack runs well on laptops, WSL, Docker containers, and CI machines.
 
 ## Architecture
 
 ```
-  Mic ──▶ Silero VAD ──▶ WAV ──▶ Parakeet STT (:5093, local ONNX)
-                                      │
-                                      ▼
-                                Agent / OpenCode
-                                      │
-                                      ▼
-                   ┌──────────────────────────────────────┐
-                   │ Supertonic TTS (:8766)  — default    │
-                   │ NeuTTS (:8020)         — fallback 1  │
-                   │ xAI (cloud, api.x.ai)  — fallback 2  │
-                   └──────────────────────────────────────┘
-                                      │
-                                      ▼
-                                afplay ──▶ listen again
+  Mic ──▶ Silero VAD ──▶ WAV ──▶ Parakeet STT (:5093, ONNX, CPU)
+    (local ONNX)                          │
+                                          ▼
+                                  Agent / OpenCode / Claude Code
+                                          │
+                                          ▼
+                     ┌──────────────────────────────────────┐
+                     │ Supertonic TTS (:8766) — default      │  ONNX, CPU
+                     │ NeuTTS (:8020)         — fallback 1   │  local GGUF
+                     │ xAI (cloud, api.x.ai)  — fallback 2   │  cloud API
+                     └──────────────────────────────────────┘
+                                          │
+                                          ▼
+                                  audio playback ──▶ listen again
 ```
 
 > **Port notes:** Supertonic defaults to `:8766` (not `:8765`) so it can coexist
-> with the existing Chatterbox TTS server on `:8765`. Override with
-> `SUPERTONIC_PORT=8765` if you want to replace Chatterbox (and stop the
-> `com.opencode.tts-server` plist). The Parakeet STT port is `:5093`; if a
-> precompiled `speech-server` already runs there, setup.sh detects it and
-> leaves it alone.
+> with an existing Chatterbox TTS server on `:8765`. Override with
+> `SUPERTONIC_PORT=8765` if you want to replace Chatterbox. The Parakeet STT
+> port is `:5093`; if a precompiled `speech-server` already runs there, `setup.sh`
+> detects it and leaves it alone.
 
 ## Features
 
-- **Silero VAD** — neural voice activity detection with automatic endpointing
-- **Parakeet STT** — local ONNX-based ASR, automatically installed on `:5093`
-- **Supertonic TTS** — local ONNX-based TTS, automatically installed on `:8766`
-- **Multi-engine TTS** — Supertonic (default local), NeuTTS (local GGUF), xAI (cloud)
+- **Silero VAD** — neural voice activity detection, ONNX, CPU-only
+- **Parakeet STT** — ONNX INT8 ASR, auto-installed, 25 languages, ~200–500ms CPU
+- **Supertonic TTS** — ONNX TTS, auto-installed, multilingual EN/ES/KO/PT/FR, CPU-only
+- **Multi-engine TTS** — Supertonic (local ONNX), NeuTTS (local GGUF), xAI (cloud)
 - **Pipelined talk loop** — `speak` ends → mic opens instantly (`TALK_AUTO_LISTEN=1`)
 - **Barge-in** — interrupt TTS playback by speaking (opt-in via `TALK_BARGE_IN=1`)
-- **OpenCode skill** — `skill("talk")` for OpenCode / Cursor / Claude Code
-- **Standalone CLI** — works without the IDE
-- **Non-destructive setup** — existing services are preserved; re-running
-  `setup.sh` is safe. Use `--force` to overwrite customized plists.
+- **Cross-platform** — macOS, Linux, Windows (PowerShell + Task Scheduler)
+- **Multi-agent** — Claude Code, OpenCode CLI, OpenClaw, Hermes Agent, Codex
+- **Interactive installer** — select components and agent integrations at setup time
+- **Non-destructive setup** — existing services preserved; re-running `setup.sh` is safe
+
+## Platform support
+
+| Platform | Installer | Auto-start | Audio |
+|----------|-----------|-----------|-------|
+| **macOS** | `setup.sh` | launchd | `afplay` |
+| **Linux** | `setup.sh` | systemd (user) | `ffplay` / `aplay` / `paplay` |
+| **Windows** | `setup.ps1` | Task Scheduler | `ffplay` / SoundPlayer |
 
 ## Quick Start
+
+### macOS / Linux
 
 ```bash
 git clone https://github.com/groxaxo/opencode-voice-service.git
 cd opencode-voice-service
 chmod +x setup.sh && ./setup.sh
+```
 
-# That's it! All backends auto-installed and running via launchd.
-# Configure xAI (optional, for cloud TTS fallback):
+Running `./setup.sh` with no arguments starts an **interactive menu** — pick which
+components (Parakeet STT, Supertonic TTS) and which agent integrations
+(Claude Code, OpenCode, OpenClaw, Hermes, Codex) to install.
+
+```bash
+# Silent full install (all components + all integrations)
+./setup.sh
+
+# Selective install (skip flags)
+./setup.sh --skip-parakeet          # skip Parakeet STT
+./setup.sh --skip-supertonic        # skip Supertonic TTS
+./setup.sh --integrations=claudecode,opencode  # only these agents
+
+# That's it! All backends auto-installed and running.
+# Optional: configure xAI cloud TTS fallback
 export XAI_API_KEY=xai-...
 ```
 
-### What setup.sh installs
+### Windows (PowerShell)
+
+```powershell
+git clone https://github.com/groxaxo/opencode-voice-service.git
+cd opencode-voice-service
+.\setup.ps1
+```
+
+The Windows installer prompts for the same component and integration choices,
+then registers Task Scheduler tasks that start Parakeet and Supertonic on login.
+
+**Prerequisites (Windows):**
+- Python 3.11+ (`winget install Python.Python.3.12`)
+- Git (`winget install Git.Git`)
+- Optional: ffmpeg for audio playback (`winget install Gyan.FFmpeg`)
+
+### What setup installs
 
 | Component | Location | Port | Auto-start |
 |-----------|----------|------|-----------|
-| Voice core | `~/.config/opencode/skills/talk/` | — | — |
-| Silero VAD | `~/.config/opencode/tts-venv/` | — | — |
-| **Parakeet STT** | `~/.config/opencode/parakeet-stt/` | **5093** | launchd |
-| **Supertonic TTS** | `~/.config/opencode/supertonic-tts/` | **8766** | launchd |
+| Voice venv (VAD + ONNX) | `~/.config/opencode/tts-venv/` | — | — |
+| **Parakeet STT** | `~/.config/opencode/parakeet-stt/` | **5093** | launchd / systemd / Task Scheduler |
+| **Supertonic TTS** | `~/.config/opencode/supertonic-tts/` | **8766** | launchd / systemd / Task Scheduler |
+| Skill (all agents) | See [Agent integrations](#agent-integrations) | — | — |
 
-### Options
+## Agent integrations
+
+The installer copies the `talk` skill to each selected agent's skill directory:
+
+| Agent | Skill path | How to activate |
+|-------|-----------|-----------------|
+| **Claude Code** | `~/.claude/skills/talk/` | `skill("talk")` or auto-detected |
+| **OpenCode CLI** | `~/.config/opencode/skills/talk/` | `skill("talk")` |
+| **OpenClaw** | `~/.openclaw/skills/talk/` | `skill("talk")` |
+| **Hermes Agent** | `~/.hermes/skills/talk/` | `skill("talk")` |
+| **Codex** | `~/.codex/skills/talk/` | auto-detected via symlink |
+
+All agents use the same `SKILL.md` descriptor, which tells them:
+1. When to invoke the skill (trigger words: *talk, voice, speak, habla, audio, tts*)
+2. How to orchestrate the VAD → STT → TTS loop
+3. Port and path configuration
+
+### Setup options
 
 ```bash
-./setup.sh                          # full setup (all backends, non-destructive)
-./setup.sh --skip-parakeet          # skip Parakeet STT installation
-./setup.sh --skip-supertonic        # skip Supertonic TTS installation
-./setup.sh --venv-only              # only create the voice venv
-./setup.sh --skip-voices            # skip reference voice generation
-./setup.sh --force                  # overwrite existing plists (DESTRUCTIVE)
-./setup.sh --uninstall              # stop services and remove plists
-./setup.sh --uninstall --force      # also remove all installed dirs
+./setup.sh                                     # interactive menu (all defaults)
+./setup.sh --skip-parakeet                     # skip Parakeet STT
+./setup.sh --skip-supertonic                   # skip Supertonic TTS
+./setup.sh --venv-only                         # only create the voice venv
+./setup.sh --skip-voices                       # skip reference voice generation
+./setup.sh --force                             # overwrite existing plists/tasks (DESTRUCTIVE)
+./setup.sh --uninstall                         # stop services and remove plists
+./setup.sh --uninstall --force                 # also remove all installed dirs
+./setup.sh --integrations=claudecode,opencode  # only install specific integrations
+./setup.sh --no-integrations                   # skip all agent integrations
 ```
 
 ## Usage
@@ -81,19 +156,28 @@ export XAI_API_KEY=xai-...
 
 ```bash
 ~/.config/opencode/skills/talk/talk.sh listen              # record + transcribe → stdout
-~/.config/opencode/skills/talk/talk.sh speak "Hello"       # TTS, then auto-listen
+~/.config/opencode/skills/talk/talk.sh speak "Hello"       # TTS + auto-listen
 TTS_ENGINE=xai talk.sh speak "…"                           # force xAI cloud TTS
 TTS_ENGINE=supertonic talk.sh speak "…"                    # force Supertonic local TTS
 ~/.config/opencode/skills/talk/talk.sh status              # health check
 ~/.config/opencode/skills/talk/talk.sh devices             # list mics
 ```
 
-### OpenCode talk loop
+### Windows PowerShell
+
+```powershell
+# After setup.ps1
+~\.config\opencode\skills\talk\talk.ps1 listen
+~\.config\opencode\skills\talk\talk.ps1 speak "Hello"
+~\.config\opencode\skills\talk\talk.ps1 status
+```
+
+### Agent talk loop (all agents)
 
 The agent runs:
 
-1. **Once:** `talk.sh listen` → first user message  
-2. **Each turn:** `talk.sh speak '<short reply>'` → plays audio, then records; **stdout = next user message**  
+1. **Once:** `talk.sh listen` → first user message
+2. **Each turn:** `talk.sh speak '<short reply>'` → plays audio, then records; **stdout = next user message**
 3. Do **not** call `listen` after `speak` (built in).
 
 See `skill/SKILL.md` for full agent rules.
@@ -104,9 +188,9 @@ See `skill/SKILL.md` for full agent rules.
 |----------|---------|-------------|
 | `STT_ENGINE` | `coreml` | STT backend (Parakeet ONNX on `:5093`) |
 | `STT_URL` | `http://127.0.0.1:5093/v1/audio/transcriptions` | Local Parakeet STT |
-| `TTS_ENGINE` | `supertonic` | `supertonic` (local), `neutts` (local), `xai` (cloud) |
+| `TTS_ENGINE` | `supertonic` | `supertonic` (local ONNX), `neutts` (local GGUF), `xai` (cloud) |
 | `SUPERTONIC_URL` | `http://127.0.0.1:8766` | Supertonic endpoint |
-| `XAI_API_KEY` | (from env) | Bearer token for xAI TTS |
+| `XAI_API_KEY` | (from env) | Bearer token for xAI TTS cloud fallback |
 | `XAI_TTS_VOICE` | `eve` | `ara`, `eve`, `leo`, `rex`, `sal` |
 | `TALK_AUTO_LISTEN` | `1` | After `speak`, run `listen` |
 | `TALK_BARGE_IN` | `0` | Interrupt TTS on speech (opt-in) |
@@ -115,6 +199,8 @@ See `skill/SKILL.md` for full agent rules.
 | `VAD_MIN_SILENCE_MS` | `500` | End-of-turn silence |
 
 ## Service management
+
+### macOS (launchd)
 
 ```bash
 # Start/stop Parakeet STT
@@ -125,52 +211,73 @@ launchctl bootout gui/$UID/com.opencode.parakeet-stt
 launchctl kickstart -k gui/$UID/com.opencode.supertonic
 launchctl bootout gui/$UID/com.opencode.supertonic
 
-# View logs
+# Logs
 tail -f ~/.config/opencode/parakeet-stt.log
 tail -f ~/.config/opencode/supertonic.log
 ```
 
+### Linux (systemd)
+
+```bash
+# Start/stop
+systemctl --user start opencode-parakeet-stt
+systemctl --user start opencode-supertonic
+
+# Status
+systemctl --user status opencode-parakeet-stt
+systemctl --user status opencode-supertonic
+
+# Logs
+journalctl --user -u opencode-parakeet-stt -f
+journalctl --user -u opencode-supertonic -f
+```
+
+### Windows (Task Scheduler)
+
+```powershell
+Start-ScheduledTask  "OpenCode-Parakeet-STT"
+Stop-ScheduledTask   "OpenCode-Parakeet-STT"
+Start-ScheduledTask  "OpenCode-Supertonic"
+Stop-ScheduledTask   "OpenCode-Supertonic"
+
+# Logs
+Get-Content "$env:USERPROFILE\.config\opencode\parakeet-stt.log" -Tail 50
+Get-Content "$env:USERPROFILE\.config\opencode\supertonic.log" -Tail 50
+```
+
 ## Re-install / migration
 
-`setup.sh` is non-destructive by default. Re-running it:
-
-- **Cloned backends** (`parakeet-stt/`, `supertonic-tts/`): `git pull --ff-only`
-  if upstream has new commits; otherwise no-op.
-- **Venvs**: reused if Python version matches; recreated if upgraded.
-- **launchd plists**: **skipped** if they already exist. Use `--force` to
-  overwrite (will replace any customizations like port changes or model
-  arguments). This is intentionally destructive to protect working installs.
-- **Service files** in `~/.config/opencode/skills/talk/`: always overwritten
-  (these are pure code, not user config).
-- **Reference voices** (`ref_voice_en.wav`, `ref_voice_es.wav`): preserved.
-
-To fully remove: `./setup.sh --uninstall --force`.
+`setup.sh` is non-destructive by default. Re-running it is safe. Use `--force` to
+overwrite existing plists/systemd units. See `./setup.sh --help` for all options.
 
 ## Directory structure
 
 ```
 opencode-voice-service/
 ├── README.md
-├── setup.sh                    # One-command full installer
+├── setup.sh                    # macOS + Linux one-command installer
+├── setup.ps1                   # Windows PowerShell installer
 ├── .env.example
 ├── service/
-│   ├── vad_recorder.py         # Silero VAD + sounddevice
-│   ├── talk.sh                 # Voice conversation orchestrator
-│   ├── tts.sh                  # Multi-engine TTS CLI
+│   ├── vad_recorder.py         # Silero VAD + sounddevice (cross-platform)
+│   ├── talk.sh                 # Voice conversation orchestrator (macOS + Linux)
+│   ├── tts.sh                  # Multi-engine TTS CLI (macOS + Linux)
 │   └── tts_lang.sh             # Shared language detection
+├── windows/
+│   └── talk.ps1                # Windows voice conversation orchestrator
 ├── skill/
-│   └── SKILL.md                # OpenCode talk skill
+│   └── SKILL.md                # Agent skill descriptor (all agents)
 ├── launchd/
-│   ├── com.opencode.parakeet-stt.plist   # Parakeet ONNX auto-start
-│   └── com.opencode.supertonic.plist     # Supertonic ONNX auto-start
+│   ├── com.opencode.parakeet-stt.plist   # macOS Parakeet auto-start
+│   └── com.opencode.supertonic.plist     # macOS Supertonic auto-start
 └── docs/
     └── architecture.md
 ```
 
 ## Related projects
 
-- [parakeet-tdt-0.6b-v3-fastapi-openai](https://github.com/groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai) — STT backend (auto-installed by setup.sh)
-- [supertonic-express](https://github.com/groxaxo/supertonic-express) — TTS backend (auto-installed by setup.sh)
+- [parakeet-tdt-0.6b-v3-fastapi-openai](https://github.com/groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai) — STT backend
+- [supertonic-express](https://github.com/groxaxo/supertonic-express) — TTS backend
 - [OpenVoiceApp](https://github.com/groxaxo/OpenVoiceApp) — iOS voice app
 - [OpenCode](https://opencode.ai)
 

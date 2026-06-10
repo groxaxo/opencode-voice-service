@@ -1,0 +1,20 @@
+[Unit]
+Description=Supertonic TTS Server (ONNX, CPU-only) on :8766
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.config/opencode/supertonic-tts/.venv/bin/python -m uvicorn api.src.main:app \
+    --host 0.0.0.0 --port 8766 --app-dir %h/.config/opencode/supertonic-tts/py
+WorkingDirectory=%h/.config/opencode/supertonic-tts/py
+Restart=always
+RestartSec=5
+Environment=ONNX_DIR=%h/.config/opencode/supertonic-tts/assets
+Environment=VOICE_STYLES_DIR=%h/.config/opencode/supertonic-tts/assets
+Environment=USE_GPU=false
+Environment=LOG_LEVEL=INFO
+StandardOutput=append:%h/.config/opencode/supertonic.log
+StandardError=append:%h/.config/opencode/supertonic.log
+
+[Install]
+WantedBy=default.target

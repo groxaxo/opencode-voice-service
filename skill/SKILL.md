@@ -1,20 +1,33 @@
 ---
 name: talk
 description: >-
-  Orchestrates VAD-driven voice conversation (Silero listen, Parakeet ONNX STT,
-  Supertonic ONNX TTS with xAI cloud fallback). Use when the user says talk,
-  voice, speak, habla, voz, audio, talk mode, or wants spoken back-and-forth.
-  Also when they ask to read a reply aloud (say it, speak that). Triggers on voice,
-  talk, speak, habla, audio, tts, stt.
+  Orchestrates VAD-driven voice conversation (Silero VAD listen, Parakeet ONNX STT,
+  Supertonic ONNX TTS with xAI cloud fallback). All inference is CPU-only — no GPU required.
+  Use when the user says talk, voice, speak, habla, voz, audio, talk mode, or wants
+  spoken back-and-forth. Also when they ask to read a reply aloud (say it, speak that).
+  Triggers on: voice, talk, speak, habla, audio, tts, stt.
 ---
 
-# Talk — Voice Conversation
+# Talk — Voice Conversation (CPU-only local voice stack)
 
-Load in OpenCode via `skill("talk")`. Codex uses the same skill at `~/.codex/skills/talk` (symlink).
+Works with **Claude Code**, **OpenCode CLI**, **OpenClaw**, **Hermes Agent**, and **Codex**.
 
-**Default STT:** local Parakeet ONNX via `parakeet-tdt-0.6b-v3-fastapi-openai` on `127.0.0.1:5093` (auto-installed by `setup.sh`). OpenAI-compatible API, 25 languages, ~20x real-time on Apple Silicon.
+Load via `skill("talk")` in any supported agent. The same `SKILL.md` is installed to
+each agent's skills directory by `setup.sh` / `setup.ps1`.
 
-**Default TTS:** **Supertonic ONNX** via `supertonic-express` on `:8766` (auto-installed by `setup.sh`). Falls back to **NeuTTS** (local GGUF, `:8020`) then **xAI** (cloud, `api.x.ai`, voice `eve`). macOS `say` is intentionally disabled. All engines have automatic fallback chains.
+| Agent | Skill path |
+|-------|-----------|
+| Claude Code  | `~/.claude/skills/talk/` |
+| OpenCode CLI | `~/.config/opencode/skills/talk/` |
+| OpenClaw     | `~/.openclaw/skills/talk/` |
+| Hermes Agent | `~/.hermes/skills/talk/` |
+| Codex        | `~/.codex/skills/talk/` |
+
+**Default STT:** local Parakeet ONNX via `parakeet-tdt-0.6b-v3-fastapi-openai` on `127.0.0.1:5093` (auto-installed by `setup.sh` / `setup.ps1`). OpenAI-compatible API, 25 languages, CPU-only ONNX INT8.
+
+**Default TTS:** **Supertonic ONNX** via `supertonic-express` on `:8766` (auto-installed). CPU-only ONNX. Falls back to **NeuTTS** (local GGUF, `:8020`) then **xAI** (cloud, `api.x.ai`, voice `eve`). `say`/TTS-system fallback intentionally disabled.
+
+**Audio playback:** `afplay` (macOS), `ffplay`/`aplay`/`paplay` (Linux), `ffplay`/SoundPlayer (Windows via `talk.ps1`).
 
 > **Port note:** Supertonic defaults to `:8766` (not `:8765`) so it can coexist
 > with the existing Chatterbox TTS server on `:8765`. If a precompiled
@@ -87,11 +100,13 @@ When the user enters talk/voice mode:
 
 | Problem | Action |
 |---------|--------|
-| No transcription | `talk.sh status` — check Parakeet ONNX on `:5093`. `launchctl kickstart -k gui/$UID/com.opencode.parakeet-stt` |
-| No TTS (Supertonic) | `talk.sh status` — check Supertonic ONNX on `:8766`. `launchctl kickstart -k gui/$UID/com.opencode.supertonic` |
+| No transcription | `talk.sh status` — check Parakeet ONNX on `:5093`. macOS: `launchctl kickstart -k gui/$UID/com.opencode.parakeet-stt`. Linux: `systemctl --user start opencode-parakeet-stt`. Windows: `Start-ScheduledTask 'OpenCode-Parakeet-STT'` |
+| No TTS (Supertonic) | `talk.sh status` — check Supertonic ONNX on `:8766`. macOS: `launchctl kickstart -k gui/$UID/com.opencode.supertonic`. Linux: `systemctl --user start opencode-supertonic`. Windows: `Start-ScheduledTask 'OpenCode-Supertonic'` |
 | VAD misses speech | `talk.sh devices`; lower `VAD_THRESHOLD` |
-| Wrong microphone | `talk.sh devices`; set `MIC_QUERY="MacBook Air Microphone"` |
+| Wrong microphone | `talk.sh devices`; set `MIC_QUERY` to your mic name substring |
+| No audio on Linux | Install ffmpeg: `sudo apt install ffmpeg` or `sudo dnf install ffmpeg` |
+| No audio on Windows | Install ffmpeg: `winget install Gyan.FFmpeg` |
 | xAI TTS fails | Check `XAI_API_KEY` is set; `talk.sh status` shows key status |
 | Listen blocks forever | Set `TALK_IDLE_TIMEOUT_S` (default 30s) |
-| All TTS failed | Fix backends; macOS `say` is intentionally not used |
-| Backends not running | Rerun `./setup.sh` to re-clone and re-install |
+| All TTS failed | Fix backends; system TTS fallback intentionally not used |
+| Backends not running | Rerun `./setup.sh` (macOS/Linux) or `.\setup.ps1` (Windows) |

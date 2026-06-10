@@ -6,6 +6,25 @@
 
 set -e
 
+# Cross-platform WAV playback (macOS afplay, Linux ffplay/aplay/paplay)
+play_wav() {
+    local f="$1"
+    [ -f "$f" ] || return 1
+    case "$(uname -s 2>/dev/null)" in
+        Darwin) afplay "$f" ;;
+        *)
+            if command -v ffplay &>/dev/null; then
+                ffplay -nodisp -autoexit -loglevel quiet "$f" 2>/dev/null
+            elif command -v aplay &>/dev/null; then
+                aplay -q "$f" 2>/dev/null
+            elif command -v paplay &>/dev/null; then
+                paplay "$f" 2>/dev/null
+            else
+                echo "[tts] No audio player found (install ffmpeg)" >&2; return 1
+            fi ;;
+    esac
+}
+
 # --- Engine config -----------------------------------------------------------
 : "${TTS_ENGINE:=neutts}"
 : "${XAI_API_KEY:=${XAI_API_KEY:-}}"
@@ -71,7 +90,7 @@ print(json.dumps(d))
 
     [ -f "$OUTPUT" ] && [ -s "$OUTPUT" ] || { echo "tts.sh: NeuTTS produced no audio" >&2; return 1; }
     [ "$TTS_NO_PLAY" = "1" ] && { echo "$OUTPUT"; return 0; }
-    afplay "$OUTPUT"
+    play_wav "$OUTPUT"
     rm -f "$OUTPUT"
 }
 
@@ -161,7 +180,7 @@ _speak_xai_single() {
 
     [ -f "$OUTPUT" ] && [ -s "$OUTPUT" ] || { echo "tts.sh: xAI produced no audio" >&2; return 1; }
     [ "$TTS_NO_PLAY" = "1" ] && { echo "$OUTPUT"; return 0; }
-    afplay "$OUTPUT"
+    play_wav "$OUTPUT"
     rm -f "$OUTPUT"
 }
 
@@ -203,7 +222,7 @@ _speak_xai_chunked() {
             sleep 0.05
         done
         if [ -f "${wav_prefix}.ready" ]; then
-            afplay "${wav_prefix}.wav"
+            play_wav "${wav_prefix}.wav"
         fi
     done
 
@@ -250,7 +269,7 @@ print(json.dumps(d))
 
     [ -f "$OUTPUT" ] && [ -s "$OUTPUT" ] || { echo "tts.sh: Supertonic produced no audio" >&2; return 1; }
     [ "$TTS_NO_PLAY" = "1" ] && { echo "$OUTPUT"; return 0; }
-    afplay "$OUTPUT"
+    play_wav "$OUTPUT"
     rm -f "$OUTPUT"
 }
 

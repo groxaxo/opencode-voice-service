@@ -1,0 +1,18 @@
+[Unit]
+Description=Parakeet STT Server (ONNX, CPU-only) on :5093
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.config/opencode/parakeet-stt/.venv/bin/python %h/.config/opencode/parakeet-stt/server.py
+WorkingDirectory=%h/.config/opencode/parakeet-stt
+Restart=always
+RestartSec=5
+Environment=PARAKEET_PORT=5093
+Environment=PARAKEET_USE_GPU=false
+Environment=PARAKEET_DEFAULT_MODEL=parakeet-tdt-0.6b-v3
+StandardOutput=append:%h/.config/opencode/parakeet-stt.log
+StandardError=append:%h/.config/opencode/parakeet-stt.log
+
+[Install]
+WantedBy=default.target

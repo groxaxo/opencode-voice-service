@@ -29,6 +29,14 @@ VENV_DIR="${CONFIG_DIR}/tts-venv"
 PYTHON="${VENV_DIR}/bin/python"
 LAUNCHD_DIR="${HOME}/Library/LaunchAgents"
 
+# Detect OS
+OS="$(uname -s 2>/dev/null || echo unknown)"
+case "$OS" in
+    Darwin) PLATFORM=macos ;;
+    Linux)  PLATFORM=linux ;;
+    *)      PLATFORM=other ;;
+esac
+
 # Backend install paths
 PARAKEET_DIR="${CONFIG_DIR}/parakeet-stt"
 PARAKEET_VENV="${PARAKEET_DIR}/.venv"
@@ -54,6 +62,14 @@ SKIP_VOICES=false
 VENV_ONLY=false
 FORCE=false
 UNINSTALL=false
+# Agent integration flags (set in interactive menu or via --integrations=)
+INTEGRATE_CLAUDECODE=true
+INTEGRATE_OPENCODE=true
+INTEGRATE_OPENCLAW=true
+INTEGRATE_HERMES=true
+INTEGRATE_CODEX=true
+INTEGRATIONS_ARG=""
+
 for arg in "$@"; do
     case "$arg" in
         --skip-parakeet)   SKIP_PARAKEE=true ;;
@@ -62,6 +78,10 @@ for arg in "$@"; do
         --venv-only)       VENV_ONLY=true ;;
         --force|-f)        FORCE=true ;;
         --uninstall)       UNINSTALL=true ;;
+        --integrations=*)  INTEGRATIONS_ARG="${arg#--integrations=}" ;;
+        --no-integrations) INTEGRATE_CLAUDECODE=false; INTEGRATE_OPENCODE=false
+                           INTEGRATE_OPENCLAW=false; INTEGRATE_HERMES=false
+                           INTEGRATE_CODEX=false ;;
         -h|--help)
             sed -n '2,22p' "$0"
             exit 0
@@ -69,6 +89,87 @@ for arg in "$@"; do
         *) warn "Unknown flag: $arg (use --help)" ;;
     esac
 done
+
+# Parse --integrations=claudecode,opencode,... (disables all others)
+if [ -n "$INTEGRATIONS_ARG" ]; then
+    INTEGRATE_CLAUDECODE=false; INTEGRATE_OPENCODE=false
+    INTEGRATE_OPENCLAW=false; INTEGRATE_HERMES=false; INTEGRATE_CODEX=false
+    IFS=',' read -ra _ilist <<< "$INTEGRATIONS_ARG"
+    for _i in "${_ilist[@]}"; do
+        case "$_i" in
+            claudecode) INTEGRATE_CLAUDECODE=true ;;
+            opencode)   INTEGRATE_OPENCODE=true ;;
+            openclaw)   INTEGRATE_OPENCLAW=true ;;
+            hermes)     INTEGRATE_HERMES=true ;;
+            codex)      INTEGRATE_CODEX=true ;;
+        esac
+    done
+fi
+
+# --- Interactive menu (shown when no args and running in a TTY) ---------------
+ask_yn() {
+    local prompt="$1" default="${2:-y}"
+    local yn
+    if [ "$default" = "y" ]; then
+        printf "  %s [Y/n]: " "$prompt"
+    else
+        printf "  %s [y/N]: " "$prompt"
+    fi
+    read -r yn
+    case "${yn:-$default}" in
+        [Yy]*) return 0 ;;
+        *)     return 1 ;;
+    esac
+}
+
+if [ $# -eq 0 ] && [ -t 0 ] && [ -t 1 ] && [ "$UNINSTALL" = "false" ]; then
+    echo ""
+    printf '\033[1;36m  ╔══════════════════════════════════════════════════════╗\033[0m\n'
+    printf '\033[1;36m  ║      OpenCode Voice Service — Setup                  ║\033[0m\n'
+    printf '\033[1;36m  ║   100%% CPU-only · No GPU Required · Local ONNX       ║\033[0m\n'
+    printf '\033[1;36m  ╚══════════════════════════════════════════════════════╝\033[0m\n'
+    echo ""
+    echo "  Components:"
+    echo "    [1] Silero VAD + Python venv  (always installed)"
+    if ask_yn "[2] Parakeet STT — local ONNX ASR on :5093 (CPU-only)" y; then
+        SKIP_PARAKEE=false
+    else
+        SKIP_PARAKEE=true
+    fi
+    if ask_yn "[3] Supertonic TTS — local ONNX TTS on :8766 (CPU-only)" y; then
+        SKIP_SUPERTONIC=false
+    else
+        SKIP_SUPERTONIC=true
+    fi
+    echo ""
+    echo "  Install skill to (agent integrations):"
+    if ask_yn "[A] Claude Code  (~/.claude/skills/talk/)" y; then
+        INTEGRATE_CLAUDECODE=true
+    else
+        INTEGRATE_CLAUDECODE=false
+    fi
+    if ask_yn "[B] OpenCode CLI (~/.config/opencode/skills/talk/)" y; then
+        INTEGRATE_OPENCODE=true
+    else
+        INTEGRATE_OPENCODE=false
+    fi
+    if ask_yn "[C] OpenClaw     (~/.openclaw/skills/talk/)" y; then
+        INTEGRATE_OPENCLAW=true
+    else
+        INTEGRATE_OPENCLAW=false
+    fi
+    if ask_yn "[D] Hermes Agent (~/.hermes/skills/talk/)" y; then
+        INTEGRATE_HERMES=true
+    else
+        INTEGRATE_HERMES=false
+    fi
+    if ask_yn "[E] Codex        (~/.codex/skills/talk)" y; then
+        INTEGRATE_CODEX=true
+    else
+        INTEGRATE_CODEX=false
+    fi
+    echo ""
+fi
 
 # --- Uninstall ---------------------------------------------------------------
 if [ "$UNINSTALL" = true ]; then
@@ -414,6 +515,8 @@ cp "$REPO_DIR/service/talk.sh" "$SKILL_DIR/talk.sh"
 cp "$REPO_DIR/service/tts.sh" "$SKILL_DIR/tts.sh"
 cp "$REPO_DIR/service/tts_lang.sh" "$SKILL_DIR/tts_lang.sh"
 cp "$REPO_DIR/skill/SKILL.md" "$SKILL_DIR/SKILL.md"
+# Windows PowerShell script (useful for WSL users or cross-platform awareness)
+[ -f "$REPO_DIR/windows/talk.ps1" ] && cp "$REPO_DIR/windows/talk.ps1" "$SKILL_DIR/talk.ps1"
 
 chmod +x "$SKILL_DIR/vad_recorder.py" "$SKILL_DIR/talk.sh" "$SKILL_DIR/tts.sh" "$SKILL_DIR/tts_lang.sh"
 ok "Service files installed to $SKILL_DIR"
@@ -478,6 +581,116 @@ if [ "$SKIP_VOICES" = false ]; then
         [ -f "$CONFIG_DIR/ref_voice_es.wav" ] && ok "Spanish reference voice created"
     else
         info "Spanish reference voice already exists"
+    fi
+fi
+
+# =============================================================================
+# Step 7b: Install agent integrations (symlinks from skill dir to each agent)
+# =============================================================================
+install_agent_integration() {
+    local name="$1"
+    local target_dir="$2"
+    local enabled="$3"
+    if [ "$enabled" != "true" ]; then
+        return
+    fi
+    # Create target directory and copy/link skill files
+    mkdir -p "$target_dir"
+    cp -r "$SKILL_DIR/." "$target_dir/"
+    chmod +x "$target_dir/talk.sh" "$target_dir/tts.sh" "$target_dir/tts_lang.sh" \
+        "$target_dir/vad_recorder.py" 2>/dev/null || true
+    ok "Integration: $name  →  $target_dir"
+}
+
+info "── Agent Integrations ─────────────────────────────────────────"
+# Claude Code
+install_agent_integration "Claude Code" "${HOME}/.claude/skills/talk" "$INTEGRATE_CLAUDECODE"
+# OpenCode (primary — already installed above, but re-sync here)
+install_agent_integration "OpenCode CLI" "${CONFIG_DIR}/skills/talk" "$INTEGRATE_OPENCODE"
+# OpenClaw
+install_agent_integration "OpenClaw" "${HOME}/.openclaw/skills/talk" "$INTEGRATE_OPENCLAW"
+# Hermes Agent
+install_agent_integration "Hermes Agent" "${HOME}/.hermes/skills/talk" "$INTEGRATE_HERMES"
+# Codex
+install_agent_integration "Codex" "${HOME}/.codex/skills/talk" "$INTEGRATE_CODEX"
+
+# =============================================================================
+# Step 7c: Linux systemd services (skip on macOS which uses launchd)
+# =============================================================================
+if [ "$PLATFORM" = "linux" ]; then
+    info "── Linux systemd services ──────────────────────────────────────"
+    SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
+    mkdir -p "$SYSTEMD_USER_DIR"
+
+    # Parakeet STT service
+    if [ "$SKIP_PARAKEE" = "false" ] && [ -d "$PARAKEET_DIR" ]; then
+        cat > "$SYSTEMD_USER_DIR/opencode-parakeet-stt.service" <<SVCEOF
+[Unit]
+Description=Parakeet STT Server (ONNX, CPU-only) on :${PARAKEET_PORT}
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${PARAKEET_VENV}/bin/python ${PARAKEET_DIR}/server.py
+WorkingDirectory=${PARAKEET_DIR}
+Restart=always
+RestartSec=5
+Environment=HOME=${HOME}
+Environment=PARAKEET_PORT=${PARAKEET_PORT}
+Environment=PARAKEET_USE_GPU=false
+Environment=PARAKEET_DEFAULT_MODEL=parakeet-tdt-0.6b-v3
+StandardOutput=append:${CONFIG_DIR}/parakeet-stt.log
+StandardError=append:${CONFIG_DIR}/parakeet-stt.log
+
+[Install]
+WantedBy=default.target
+SVCEOF
+        ok "systemd: opencode-parakeet-stt.service written to $SYSTEMD_USER_DIR"
+    fi
+
+    # Supertonic TTS service
+    if [ "$SKIP_SUPERTONIC" = "false" ] && [ -d "$SUPERTONIC_DIR" ]; then
+        cat > "$SYSTEMD_USER_DIR/opencode-supertonic.service" <<SVCEOF
+[Unit]
+Description=Supertonic TTS Server (ONNX, CPU-only) on :${SUPERTONIC_PORT}
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${SUPERTONIC_VENV}/bin/python -m uvicorn api.src.main:app \
+    --host 0.0.0.0 --port ${SUPERTONIC_PORT} --app-dir ${SUPERTONIC_DIR}/py
+WorkingDirectory=${SUPERTONIC_DIR}/py
+Restart=always
+RestartSec=5
+Environment=HOME=${HOME}
+Environment=ONNX_DIR=${SUPERTONIC_DIR}/assets
+Environment=VOICE_STYLES_DIR=${SUPERTONIC_DIR}/assets
+Environment=USE_GPU=false
+Environment=LOG_LEVEL=INFO
+StandardOutput=append:${CONFIG_DIR}/supertonic.log
+StandardError=append:${CONFIG_DIR}/supertonic.log
+
+[Install]
+WantedBy=default.target
+SVCEOF
+        ok "systemd: opencode-supertonic.service written to $SYSTEMD_USER_DIR"
+    fi
+
+    # Reload and enable
+    if command -v systemctl &>/dev/null && systemctl --user status >/dev/null 2>&1; then
+        systemctl --user daemon-reload 2>/dev/null || true
+        [ "$SKIP_PARAKEE" = "false" ] && [ -d "$PARAKEET_DIR" ] && {
+            systemctl --user enable --now opencode-parakeet-stt.service 2>/dev/null || true
+            ok "systemd: opencode-parakeet-stt started"
+        }
+        [ "$SKIP_SUPERTONIC" = "false" ] && [ -d "$SUPERTONIC_DIR" ] && {
+            systemctl --user enable --now opencode-supertonic.service 2>/dev/null || true
+            ok "systemd: opencode-supertonic started"
+        }
+    else
+        warn "systemctl --user not available. Enable manually:"
+        warn "  systemctl --user daemon-reload"
+        warn "  systemctl --user enable --now opencode-parakeet-stt opencode-supertonic"
     fi
 fi
 
