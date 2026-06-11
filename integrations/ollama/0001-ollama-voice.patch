@@ -1,4 +1,4 @@
-From 2348dd619df509ca37a2c038e2fd6d5e65636664 Mon Sep 17 00:00:00 2001
+From 20e9881bba43b9827e9d9447d0e71b9f40cf1382 Mon Sep 17 00:00:00 2001
 From: opencode <facundovladimir@gmail.com>
 Date: Thu, 11 Jun 2026 18:03:30 +1200
 Subject: [PATCH] cmd: add `ollama voice` to talk to models with speech
@@ -22,7 +22,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
  cmd/cmd.go                    |  20 ++
  cmd/interactive.go            |  43 ++-
  cmd/voice.go                  | 166 ++++++++++
- docs/voice.md                 |  98 ++++++
+ docs/voice.md                 | 105 +++++++
  voice/scripts/setup.ps1       | 192 ++++++++++++
  voice/scripts/setup.sh        | 421 +++++++++++++++++++++++++
  voice/scripts/talk.ps1        | 274 +++++++++++++++++
@@ -31,7 +31,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
  voice/scripts/tts_lang.sh     |  59 ++++
  voice/scripts/vad_recorder.py | 437 ++++++++++++++++++++++++++
  voice/voice.go                | 339 +++++++++++++++++++++
- 13 files changed, 2926 insertions(+), 1 deletion(-)
+ 13 files changed, 2933 insertions(+), 1 deletion(-)
  create mode 100644 cmd/voice.go
  create mode 100644 docs/voice.md
  create mode 100644 voice/scripts/setup.ps1
@@ -370,10 +370,10 @@ index 00000000..df3777a2
 +}
 diff --git a/docs/voice.md b/docs/voice.md
 new file mode 100644
-index 00000000..6db27790
+index 00000000..202d2049
 --- /dev/null
 +++ b/docs/voice.md
-@@ -0,0 +1,98 @@
+@@ -0,0 +1,105 @@
 +# Voice
 +
 +`ollama voice` lets you talk to a model with your voice and hear its replies. The
@@ -420,6 +420,13 @@ index 00000000..6db27790
 +
 +The installer records your choice and the resolved backend URLs in
 +`~/.ollama/voice/voice.env`, which the voice command reads at runtime.
++
++On macOS the `coreml` path uses **CoreML/Neural-Engine TTS** (Supertonic-3) but keeps
++**ONNX Parakeet for STT**. This is deliberate: benchmarked on Apple Silicon, ONNX Parakeet
++transcribes a typical ~2.5s turn in ~0.26s and a ~14s passage in ~0.54s (≈26× realtime) —
++faster than the CoreML alternative on longer audio — while staying portable and identical
++across macOS/Linux/Windows. The CoreML speech recognizer is only marginally quicker on very
++short clips and is not redistributable, so ONNX STT is the better default everywhere.
 +
 +Requirements: `python` (3.10+, 3.11 for the macOS CoreML backend) and `git` on `PATH`
 +(plus `git-lfs` for the CoreML model weights). Audio playback uses the system player
