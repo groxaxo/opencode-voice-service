@@ -1,7 +1,7 @@
 # OpenCode Voice Service
 
 **Local voice conversation for AI agents — 100% CPU-only, no GPU required.**  
-One-command setup installs the full voice pipeline: [Silero VAD](https://github.com/snakers4/silero-vad) for speech detection, [Parakeet TDT 0.6B](https://github.com/groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai) for ONNX transcription, and [Supertonic TTS 2](https://github.com/groxaxo/supertonic-express) for ONNX synthesis — **all running locally on CPU, no cloud required**.
+One-command setup installs the full voice pipeline: [Silero VAD](https://github.com/snakers4/silero-vad) for speech detection, [Parakeet TDT 0.6B](https://github.com/groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai) for ONNX transcription, and [Supertonic TTS 3](https://github.com/groxaxo/supertonic-express) for ONNX synthesis — **all running locally on CPU, no cloud required**.
 
 Works out of the box with **Claude Code**, **OpenCode CLI**, **OpenClaw**, **Hermes Agent**, and **Codex**.
 
@@ -15,7 +15,7 @@ All three engines in this stack are designed for CPU inference:
 |--------|---------|-------------|------|
 | **Silero VAD** | ONNX (PyTorch) | ~5ms/frame on any CPU | 1.8MB |
 | **Parakeet TDT 0.6B** | ONNX INT8 | ~200–500ms on modern CPU | ~300MB |
-| **Supertonic TTS 2** | ONNX (quantized) | ~100–500ms on modern CPU | ~500MB |
+| **Supertonic TTS 3** | ONNX (quantized) | ~100–500ms on modern CPU | ~500MB |
 
 The VAD and ONNX stack are optimized for Intel, AMD, and Apple Silicon CPUs. No CUDA, no ROCm, no GPU dependencies of any kind. The stack runs well on laptops, WSL, Docker containers, and CI machines.
 

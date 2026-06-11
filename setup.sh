@@ -420,8 +420,8 @@ install_supertonic() {
         mkdir -p "$ONNX_DIR"
         "$SUPERTONIC_VENV/bin/python" -c "
 from huggingface_hub import snapshot_download
-print('Downloading Supertonic-TTS-2-ONNX from Hugging Face...')
-snapshot_download('onnx-community/Supertonic-TTS-2-ONNX', local_dir='$ONNX_DIR', ignore_patterns=['*.md','.gitattributes'])
+print('Downloading Supertonic-TTS-3-ONNX from Hugging Face...')
+snapshot_download('onnx-community/Supertonic-TTS-3-ONNX', local_dir='$ONNX_DIR', ignore_patterns=['*.md','.gitattributes'])
 print('Model download complete.')
 " || warn "Model download failed — run setup.sh again or download manually"
         ok "Supertonic ONNX model downloaded to $ONNX_DIR"

@@ -80,8 +80,8 @@ sounddevice.InputStream ──▶ Silero VAD (ONNX) ──▶ Endpointer ──�
   ──────────▶ http://127.0.0.1:8766/v1/audio/speech  (OpenAI-compatible)
   text + voice style + lang            │
                                         ▼
-  Supertonic-TTS-2-ONNX
-  (onnx-community/Supertonic-TTS-2-ONNX)
+  Supertonic-TTS-3-ONNX
+  (onnx-community/Supertonic-TTS-3-ONNX)
                                         │
                                         ▼
   WAV ──▶ afplay

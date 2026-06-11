@@ -313,8 +313,8 @@ function Install-Supertonic {
         New-Item -ItemType Directory -Force -Path $onnxDir | Out-Null
         & "$SupertonicVenv\Scripts\python" -c @"
 from huggingface_hub import snapshot_download
-print('Downloading Supertonic-TTS-2-ONNX...')
-snapshot_download('onnx-community/Supertonic-TTS-2-ONNX', local_dir=r'$onnxDir', ignore_patterns=['*.md','.gitattributes'])
+print('Downloading Supertonic-TTS-3-ONNX...')
+snapshot_download('onnx-community/Supertonic-TTS-3-ONNX', local_dir=r'$onnxDir', ignore_patterns=['*.md','.gitattributes'])
 print('Model download complete.')
 "@
         ok "Supertonic ONNX model downloaded"
