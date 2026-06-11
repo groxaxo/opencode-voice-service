@@ -61,6 +61,10 @@ the GPU free for the model that's actually answering you.
                                           │
                                           ▼
                                   audio playback ──▶ listen again
+
+  Browser ──▶ Dashboard (:7862) ──▶ Supertonic :8766  (TTS test)
+                (frontend/)      ──▶ Parakeet   :5093  (STT test)
+                                 ──▶ systemctl          (GPU/CPU toggle)
 ```
 
 > **Port notes:** Supertonic defaults to `:8766` (not `:8765`) so it can coexist
@@ -78,6 +82,7 @@ the GPU free for the model that's actually answering you.
 - **Pipelined talk loop** — `speak` ends → mic opens instantly (`TALK_AUTO_LISTEN=1`)
 - **Barge-in** — interrupt TTS playback by speaking (opt-in via `TALK_BARGE_IN=1`)
 - **Cross-platform** — macOS, Linux, Windows (PowerShell + Task Scheduler)
+- **Web dashboard** — browser UI at `:7862` to test TTS/STT and tune all settings live
 - **Multi-agent** — Claude Code, OpenCode CLI, OpenClaw, Hermes Agent, Codex
 - **Interactive installer** — select components and agent integrations at setup time
 - **Non-destructive setup** — existing services preserved; re-running `setup.sh` is safe
@@ -141,6 +146,7 @@ then registers Task Scheduler tasks that start Parakeet and Supertonic on login.
 | Voice venv (VAD + ONNX) | `~/.config/opencode/tts-venv/` | — | — |
 | **Parakeet STT** | `~/.config/opencode/parakeet-stt/` | **5093** | launchd / systemd / Task Scheduler |
 | **Supertonic TTS** | `~/.config/opencode/supertonic-tts/` | **8766** | launchd / systemd / Task Scheduler |
+| **Web dashboard** | `frontend/` (repo) | **7862** | manual (`bash frontend/start.sh`) |
 | Skill (all agents) | See [Agent integrations](#agent-integrations) | — | — |
 
 ## Agent integrations
@@ -174,6 +180,28 @@ All agents use the same `SKILL.md` descriptor, which tells them:
 ./setup.sh --integrations=claudecode,opencode  # only install specific integrations
 ./setup.sh --no-integrations                   # skip all agent integrations
 ```
+
+## Web Dashboard
+
+A single-page control panel for live testing and tuning all three components.
+No npm, no framework — just open a browser.
+
+```bash
+cd frontend && bash start.sh
+# → http://localhost:7862
+```
+
+| Panel | Controls |
+|-------|---------|
+| **TTS Test** | Voice (F1–F5 / M1–M5), language (en/es/ko/pt/fr), inference steps (1–20), speed (0.5–2×) → plays audio in-browser |
+| **STT Test** | Record from mic or upload a WAV → transcribes via Parakeet |
+| **VAD Settings** | Speech threshold, min silence, pre-speech padding, max duration — saved to `~/.config/opencode/frontend-config.json` |
+| **Backend Settings** | GPU/CPU toggle per service — writes a systemd drop-in and restarts immediately; live 🟢/🔴 status badges |
+
+The dashboard runs a FastAPI proxy on `:7862` that forwards TTS requests to
+Supertonic (`:8766`) and STT requests to Parakeet (`:5093`), avoiding CORS
+issues. All dependencies install automatically into the existing `tts-venv`
+on first launch.
 
 ## Usage
 
@@ -220,8 +248,9 @@ See `skill/SKILL.md` for full agent rules.
 | `TALK_AUTO_LISTEN` | `1` | After `speak`, run `listen` |
 | `TALK_BARGE_IN` | `0` | Interrupt TTS on speech (opt-in) |
 | `TALK_IDLE_TIMEOUT_S` | `30` | Exit listen if no speech |
-| `VAD_THRESHOLD` | `0.5` | Speech sensitivity |
-| `VAD_MIN_SILENCE_MS` | `500` | End-of-turn silence |
+| `VAD_THRESHOLD` | `0.5` | Speech sensitivity (also editable in dashboard) |
+| `VAD_MIN_SILENCE_MS` | `500` | End-of-turn silence (also editable in dashboard) |
+| `PORT` | `7862` | Web dashboard port (`PORT=8080 bash frontend/start.sh`) |
 
 ## Service management
 

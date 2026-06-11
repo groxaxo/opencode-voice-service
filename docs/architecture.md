@@ -156,6 +156,56 @@ Measured on an Intel Core i7-12700KF (CPU only, no GPU); see the
 | TTS (xAI, cloud) | ~500–2000ms |
 | **E2E voice overhead (speak → hear, excl. LLM)** | **~1–1.5s** local |
 
+## Web Dashboard (frontend/)
+
+A browser-based control panel for live testing and configuration, served by a
+FastAPI proxy at `:7862`.
+
+```
+Browser :7862 ──▶ frontend/server.py ──▶ Supertonic :8766  (TTS proxy)
+                                     ──▶ Parakeet   :5093  (STT proxy)
+                                     ──▶ systemctl          (GPU restart)
+```
+
+### Panels
+
+| Panel | What it does |
+|-------|-------------|
+| **TTS Test** | Type text → pick voice (F1–F5 / M1–M5), language, steps (1–20), speed (0.5–2×) → Synthesize → plays in-browser `<audio>` |
+| **STT Test** | Record from mic (MediaRecorder) or upload a WAV → Transcribe → shows Parakeet output |
+| **VAD Settings** | Live sliders for threshold / min-silence / pre-speech / max-duration → Save persists to `frontend-config.json` |
+| **Backend Settings** | GPU/CPU toggle per service → Apply & Restart writes systemd drop-in override and restarts immediately |
+
+### Launch
+
+```bash
+cd frontend && bash start.sh       # http://localhost:7862
+PORT=8080 bash start.sh            # custom port
+```
+
+`start.sh` auto-installs `fastapi`, `uvicorn`, `httpx`, `python-multipart`
+into the existing `tts-venv` on first run.
+
+### Frontend API
+
+| Route | Method | Purpose |
+|-------|--------|---------|
+| `/` | GET | Serve `index.html` |
+| `/api/voices` | GET | List available Supertonic voices |
+| `/api/status` | GET | Health of Supertonic + Parakeet |
+| `/api/tts` | POST | Proxy to Supertonic `:8766/v1/audio/speech` |
+| `/api/stt` | POST | Proxy multipart to Parakeet `:5093/v1/audio/transcriptions` |
+| `/api/config` | GET/POST | Read/write VAD + GPU settings (`frontend-config.json`) |
+
+### GPU toggle flow
+
+1. POST `/api/config` with `use_gpu_supertonic: true`
+2. Writes `~/.config/systemd/user/opencode-supertonic.service.d/gpu-override.conf`
+3. Runs `systemctl --user daemon-reload && restart opencode-supertonic`
+4. Returns `{"restarted": ["opencode-supertonic"]}`
+
+Same pattern for `use_gpu_parakeet` → `opencode-parakeet-stt`.
+
 ## Install paths
 
 | Component | Path | Port |
@@ -164,13 +214,22 @@ Measured on an Intel Core i7-12700KF (CPU only, no GPU); see the
 | Voice venv | `~/.config/opencode/tts-venv/` | — |
 | Parakeet STT | `~/.config/opencode/parakeet-stt/` | 5093 |
 | Supertonic TTS | `~/.config/opencode/supertonic-tts/` | 8766 |
+| **Web dashboard** | `frontend/` (repo) | **7862** |
+| VAD/GPU config | `~/.config/opencode/frontend-config.json` | — |
 
-### Launchd services
+### Launchd services (macOS)
 
 | Label | Description | Log |
 |-------|-------------|-----|
 | `com.opencode.parakeet-stt` | Parakeet ONNX STT | `~/.config/opencode/parakeet-stt.log` |
 | `com.opencode.supertonic` | Supertonic ONNX TTS | `~/.config/opencode/supertonic.log` |
+
+### Systemd services (Linux)
+
+| Unit | Description | Log |
+|------|-------------|-----|
+| `opencode-parakeet-stt.service` | Parakeet ONNX STT | `~/.config/opencode/parakeet-stt.log` |
+| `opencode-supertonic.service` | Supertonic ONNX TTS | `~/.config/opencode/supertonic.log` |
 
 ## Dependencies
 
