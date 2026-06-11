@@ -60,13 +60,28 @@ go build .          # produces the ./ollama binary
 ./ollama voice --setup
 ```
 
-This installs everything under `~/.ollama/voice/` (override with `OLLAMA_VOICE_HOME`):
-clones and starts the Parakeet STT server on `:5093` and the Supertonic TTS server on
-`:8766`, and registers auto-start units — **systemd `--user`** on Linux, **launchd** on
-macOS, **Task Scheduler** on Windows. The first run downloads ~500 MB of ONNX weights.
+`--setup` is an **interactive installer**: it detects your OS/GPU, proposes an
+acceleration backend, and lets you pick. It installs everything under `~/.ollama/voice/`
+(override with `OLLAMA_VOICE_HOME`): the Parakeet STT server on `:5093` and the Supertonic
+TTS server on `:8766`, and registers auto-start units — **systemd `--user`** on Linux,
+**launchd** on macOS, **Task Scheduler** on Windows.
 
-On Windows, run the equivalent from a PowerShell-capable build of the same binary;
-`--setup` invokes the bundled `setup.ps1`.
+Acceleration (`--accel`, default `auto`):
+
+| Value | Where | Backend |
+| --- | --- | --- |
+| `cpu` | any | plain `onnxruntime` (portable) |
+| `cuda` | Linux | `onnxruntime-gpu` on NVIDIA |
+| `coreml` | macOS | Apple Neural Engine — Supertonic-3 CoreML (`CPU_AND_NE`) |
+| `directml` | Windows | `onnxruntime-directml` (GPU) |
+
+```bash
+./ollama voice --setup --accel cpu --yes   # non-interactive
+./ollama voice --setup --accel coreml      # macOS Neural Engine
+```
+
+On Windows, `--setup` invokes the bundled `setup.ps1` (CPU or DirectML) and registers the
+Task Scheduler tasks.
 
 ### 4. Talk to a model
 

@@ -1,4 +1,4 @@
-From 670177409f1be8b737292698b64c8c1be16bd796 Mon Sep 17 00:00:00 2001
+From 391945b90722b4b45fc8e8f121c52054c3fd104f Mon Sep 17 00:00:00 2001
 From: opencode <facundovladimir@gmail.com>
 Date: Thu, 11 Jun 2026 18:03:30 +1200
 Subject: [PATCH] cmd: add `ollama voice` to talk to models with speech
@@ -19,19 +19,19 @@ OpenAI-compatible HTTP services configurable via STT_URL/SUPERTONIC_URL.
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
 ---
  README.md                     |  13 +
- cmd/cmd.go                    |  18 ++
+ cmd/cmd.go                    |  20 ++
  cmd/interactive.go            |  43 ++-
- cmd/voice.go                  | 164 ++++++++++
- docs/voice.md                 |  77 +++++
- voice/scripts/setup.ps1       | 162 ++++++++++
- voice/scripts/setup.sh        | 264 ++++++++++++++++
+ cmd/voice.go                  | 166 ++++++++++
+ docs/voice.md                 |  98 ++++++
+ voice/scripts/setup.ps1       | 192 ++++++++++++
+ voice/scripts/setup.sh        | 388 ++++++++++++++++++++++++
  voice/scripts/talk.ps1        | 274 +++++++++++++++++
  voice/scripts/talk.sh         | 556 ++++++++++++++++++++++++++++++++++
  voice/scripts/tts.sh          | 309 +++++++++++++++++++
  voice/scripts/tts_lang.sh     |  59 ++++
  voice/scripts/vad_recorder.py | 437 ++++++++++++++++++++++++++
- voice/voice.go                | 287 ++++++++++++++++++
- 13 files changed, 2662 insertions(+), 1 deletion(-)
+ voice/voice.go                | 339 +++++++++++++++++++++
+ 13 files changed, 2893 insertions(+), 1 deletion(-)
  create mode 100644 cmd/voice.go
  create mode 100644 docs/voice.md
  create mode 100644 voice/scripts/setup.ps1
@@ -75,10 +75,10 @@ index 1e5a52d2..722eba7f 100644
  
  ## Community Integrations
 diff --git a/cmd/cmd.go b/cmd/cmd.go
-index 93a86682..4bd22553 100644
+index 93a86682..f94829c8 100644
 --- a/cmd/cmd.go
 +++ b/cmd/cmd.go
-@@ -2423,6 +2423,23 @@ func NewCLI() *cobra.Command {
+@@ -2423,6 +2423,25 @@ func NewCLI() *cobra.Command {
  	runCmd.Flags().Bool("imagegen", false, "Use the imagegen runner for LLM inference")
  	runCmd.Flags().MarkHidden("imagegen")
  
@@ -90,6 +90,8 @@ index 93a86682..4bd22553 100644
 +	}
 +
 +	voiceCmd.Flags().Bool("setup", false, "Install and start the local speech (STT/TTS) backends")
++	voiceCmd.Flags().String("accel", "auto", "Speech backend acceleration: auto|cpu|cuda|coreml (with --setup)")
++	voiceCmd.Flags().Bool("yes", false, "Non-interactive --setup: accept the auto-detected acceleration")
 +	voiceCmd.Flags().String("lang", "", "Spoken language hint: en, es, or empty to auto-detect")
 +	voiceCmd.Flags().Bool("no-speak", false, "Transcribe and chat without speaking replies aloud")
 +	voiceCmd.Flags().String("keepalive", "", "Duration to keep a model loaded (e.g. 5m)")
@@ -102,7 +104,7 @@ index 93a86682..4bd22553 100644
  	stopCmd := &cobra.Command{
  		Use:     "stop MODEL",
  		Short:   "Stop a running model",
-@@ -2600,6 +2617,7 @@ func NewCLI() *cobra.Command {
+@@ -2600,6 +2619,7 @@ func NewCLI() *cobra.Command {
  		createCmd,
  		showCmd,
  		runCmd,
@@ -196,10 +198,10 @@ index ea1ed984..3d2231aa 100644
  			sb.Reset()
 diff --git a/cmd/voice.go b/cmd/voice.go
 new file mode 100644
-index 00000000..6df71af9
+index 00000000..df3777a2
 --- /dev/null
 +++ b/cmd/voice.go
-@@ -0,0 +1,164 @@
+@@ -0,0 +1,166 @@
 +package cmd
 +
 +import (
@@ -229,7 +231,9 @@ index 00000000..6df71af9
 +// with `ollama voice --setup`.
 +func VoiceHandler(cmd *cobra.Command, args []string) error {
 +	if setup, _ := cmd.Flags().GetBool("setup"); setup {
-+		return voice.Setup(cmd.Context())
++		accel, _ := cmd.Flags().GetString("accel")
++		yes, _ := cmd.Flags().GetBool("yes")
++		return voice.Setup(cmd.Context(), accel, yes)
 +	}
 +
 +	if len(args) < 1 {
@@ -366,10 +370,10 @@ index 00000000..6df71af9
 +}
 diff --git a/docs/voice.md b/docs/voice.md
 new file mode 100644
-index 00000000..c1a28105
+index 00000000..6db27790
 --- /dev/null
 +++ b/docs/voice.md
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,98 @@
 +# Voice
 +
 +`ollama voice` lets you talk to a model with your voice and hear its replies. The
@@ -391,15 +395,34 @@ index 00000000..c1a28105
 +ollama voice --setup
 +```
 +
-+This creates `~/.ollama/voice/` (override with `OLLAMA_VOICE_HOME`), installs the VAD
-+venv, clones and starts the Parakeet STT and Supertonic TTS servers, and registers
-+auto-start units (systemd `--user` on Linux, launchd on macOS) so they survive reboots.
-+The first run downloads ~500 MB of ONNX weights.
++`--setup` is an **interactive installer**. It detects your OS/GPU, proposes an
++acceleration backend, and lets you choose. It creates `~/.ollama/voice/` (override with
++`OLLAMA_VOICE_HOME`), installs the VAD venv, clones and starts the Parakeet STT and
++Supertonic TTS servers, and registers auto-start units (systemd `--user` on Linux,
++launchd on macOS, Task Scheduler on Windows) so they survive reboots.
 +
-+On Windows the same command runs the PowerShell installer (`setup.ps1`) and registers
-+the backends as Task Scheduler tasks that start at logon.
++### Acceleration
 +
-+Requirements: `python` (3.10+) and `git` on `PATH`. Audio playback uses the system player
++| `--accel` | Where | What it installs |
++| --- | --- | --- |
++| `auto` (default) | any | macOS → `coreml`, Linux+NVIDIA → `cuda`, otherwise `cpu` |
++| `cpu` | any | plain `onnxruntime` — portable, already fast (Parakeet ~9–21×, Supertonic ~3–12× realtime) |
++| `cuda` | Linux | `onnxruntime-gpu` on an NVIDIA GPU |
++| `coreml` | macOS | Apple Neural Engine — **Supertonic-3 CoreML** (`CPU_AND_NE`), mirroring the project's reference Mac config |
++| `directml` | Windows | `onnxruntime-directml` for GPU |
++
++Run it non-interactively with the auto-detected default using `--yes`, or force a path:
++
++```shell
++ollama voice --setup --accel cpu --yes      # scriptable, no prompt
++ollama voice --setup --accel coreml         # macOS Neural Engine
++```
++
++The installer records your choice and the resolved backend URLs in
++`~/.ollama/voice/voice.env`, which the voice command reads at runtime.
++
++Requirements: `python` (3.10+, 3.11 for the macOS CoreML backend) and `git` on `PATH`
++(plus `git-lfs` for the CoreML model weights). Audio playback uses the system player
 +(`afplay` on macOS; `ffplay`/`aplay`/`paplay` on Linux; the built-in player on Windows).
 +Linux, macOS, and Windows are all supported.
 +
@@ -416,7 +439,9 @@ index 00000000..c1a28105
 +
 +| Flag | Description |
 +| --- | --- |
-+| `--setup` | Install and start the local STT/TTS backends |
++| `--setup` | Install and start the local STT/TTS backends (interactive) |
++| `--accel auto\|cpu\|cuda\|coreml` | Acceleration for `--setup` (default: auto) |
++| `--yes` | Non-interactive `--setup`: accept the auto-detected acceleration |
 +| `--lang en\|es` | Spoken-language hint (default: auto-detect) |
 +| `--no-speak` | Transcribe and chat without speaking replies aloud |
 +| `--keepalive 5m` | How long to keep the model loaded |
@@ -449,10 +474,10 @@ index 00000000..c1a28105
 +| `MIC_QUERY` | _(auto)_ | Substring to pick a specific microphone |
 diff --git a/voice/scripts/setup.ps1 b/voice/scripts/setup.ps1
 new file mode 100644
-index 00000000..df3f6584
+index 00000000..fcc5822e
 --- /dev/null
 +++ b/voice/scripts/setup.ps1
-@@ -0,0 +1,162 @@
+@@ -0,0 +1,192 @@
 +<#
 +.SYNOPSIS
 +    Installs the local, CPU-only speech backends for `ollama voice` on Windows.
@@ -479,6 +504,9 @@ index 00000000..df3f6584
 +    [switch]$SkipParakeet,
 +    [switch]$SkipSupertonic,
 +    [switch]$VenvOnly,
++    [ValidateSet("auto","cpu","directml")]
++    [string]$Accel = "auto",
++    [switch]$Yes,
 +    [switch]$Force
 +)
 +
@@ -500,6 +528,21 @@ index 00000000..df3f6584
 +function warn { param($m) Write-Host "[voice-setup] $m" -ForegroundColor Yellow }
 +
 +New-Item -ItemType Directory -Force -Path $Base | Out-Null
++
++# ── Acceleration selection ────────────────────────────────────────────────────
++# Windows: cpu (portable) or directml (onnxruntime-directml for GPU).
++$DefaultAccel = "cpu"
++if ($Accel -eq "auto" -and -not $Yes) {
++    Write-Host ""
++    info "Select speech-backend acceleration (default: $DefaultAccel):"
++    Write-Host "    [1] cpu       — portable, CPU only" -ForegroundColor Gray
++    Write-Host "    [2] directml  — GPU via DirectML (onnxruntime-directml)" -ForegroundColor Gray
++    $c = Read-Host "  Choice [1/2] (Enter for $DefaultAccel)"
++    switch ($c) { "1" { $Accel = "cpu" } "2" { $Accel = "directml" } default { $Accel = $DefaultAccel } }
++}
++if ($Accel -eq "auto") { $Accel = $DefaultAccel }
++info "Acceleration: $Accel"
++Set-Content "$Base\accel" $Accel
 +
 +# ── Step 1: voice core venv (VAD + mic) ───────────────────────────────────────
 +if (-not (Test-Path $VenvDir)) {
@@ -535,7 +578,8 @@ index 00000000..df3f6584
 +    }
 +    & "$ParakeetVenv\Scripts\pip" install --quiet -r $reqWin 2>$null
 +    & "$ParakeetVenv\Scripts\pip" install --quiet "uvicorn[standard]" fastapi python-multipart silero-vad 2>$null
-+    ok "Parakeet STT installed"
++    if ($Accel -eq "directml") { & "$ParakeetVenv\Scripts\pip" install --quiet onnxruntime-directml 2>$null }
++    ok "Parakeet STT installed ($Accel)"
 +
 +    $taskName = "Ollama-Voice-Parakeet-STT"
 +    $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
@@ -573,7 +617,8 @@ index 00000000..df3f6584
 +    $reqFile = "$SupertonicDir\py\requirements.txt"
 +    if (Test-Path $reqFile) { & "$SupertonicVenv\Scripts\pip" install --quiet -r $reqFile 2>$null }
 +    & "$SupertonicVenv\Scripts\pip" install --quiet huggingface-hub transformers 2>$null
-+    ok "Supertonic dependencies installed"
++    if ($Accel -eq "directml") { & "$SupertonicVenv\Scripts\pip" install --quiet onnxruntime-directml 2>$null }
++    ok "Supertonic dependencies installed ($Accel)"
 +
 +    $onnxDir = "$SupertonicDir\assets"
 +    if (-not (Test-Path "$onnxDir\model_q4.onnx") -and -not (Test-Path "$onnxDir\model.onnx")) {
@@ -611,27 +656,44 @@ index 00000000..df3f6584
 +Install-Parakeet
 +Install-Supertonic
 +
++# Persist runtime env for the orchestrator (loaded by the voice driver).
++@"
++# Written by ollama voice --setup (accel=$Accel). Loaded by the voice driver.
++OLLAMA_VOICE_ACCEL=$Accel
++STT_URL=http://127.0.0.1:$ParakeetPort/v1/audio/transcriptions
++STT_MODEL=parakeet-tdt-0.6b-v3
++SUPERTONIC_URL=http://127.0.0.1:$SupertonicPort
++TTS_ENGINE=supertonic
++"@ | Set-Content "$Base\voice.env"
++
 +Write-Host ""
-+ok "Voice backends installed under $Base"
++ok "Voice backends installed under $Base (acceleration: $Accel)"
 +info "STT: http://127.0.0.1:$ParakeetPort   TTS: http://127.0.0.1:$SupertonicPort"
 +info "Now run:  ollama voice <model>   (e.g. ollama voice llama3.2)"
 diff --git a/voice/scripts/setup.sh b/voice/scripts/setup.sh
 new file mode 100755
-index 00000000..b459b49d
+index 00000000..dae6d5ba
 --- /dev/null
 +++ b/voice/scripts/setup.sh
-@@ -0,0 +1,264 @@
+@@ -0,0 +1,388 @@
 +#!/bin/bash
-+# setup.sh — installs the local, CPU-only speech backends for `ollama voice`.
++# setup.sh — installs the local speech backends for `ollama voice`.
 +#
-+# Everything is installed under $HOME/.ollama/voice (override OLLAMA_VOICE_HOME):
-+#   1. tts-venv          — Silero VAD + sounddevice for mic capture
-+#   2. Parakeet STT       — ONNX ASR served on :5093 (OpenAI-compatible)
-+#   3. Supertonic TTS     — ONNX TTS served on :8766 (OpenAI-compatible)
-+#   4. Auto-start         — systemd --user (Linux) / launchd (macOS)
++# Interactive installer: detects your OS/GPU, proposes an acceleration backend,
++# and lets you choose. Everything lands under $HOME/.ollama/voice
++# (override with OLLAMA_VOICE_HOME):
++#   1. tts-venv        — Silero VAD + sounddevice for mic capture
++#   2. Parakeet STT     — ASR served on :5093 (OpenAI-compatible)
++#   3. Supertonic TTS   — TTS served on :8766 (OpenAI-compatible)
++#   4. Auto-start       — systemd --user (Linux) / launchd (macOS)
 +#
-+# Re-running is safe: existing venvs, clones, and service files are reused.
-+# Flags: --skip-parakeet  --skip-supertonic  --venv-only
++# Acceleration (--accel): auto | cpu | cuda | coreml
++#   cpu     plain onnxruntime (portable, already fast)
++#   cuda    onnxruntime-gpu on NVIDIA (Linux)
++#   coreml  Apple Neural Engine on macOS — Supertonic-3 CoreML (CPU_AND_NE),
++#           mirroring the known-good config from the project's reference Mac
++# Re-running is safe. Flags: --accel <v>  --yes  --skip-parakeet
++#   --skip-supertonic  --venv-only
 +
 +set -e
 +
@@ -642,8 +704,10 @@ index 00000000..b459b49d
 +PARAKEET_VENV="$PARAKEET_DIR/.venv"
 +PARAKEET_PORT="${PARAKEET_PORT:-5093}"
 +
-+SUPERTONIC_DIR="$BASE/supertonic-tts"
++SUPERTONIC_DIR="$BASE/supertonic-tts"            # ONNX (cpu/cuda)
 +SUPERTONIC_VENV="$SUPERTONIC_DIR/.venv"
++SUPERTONIC_COREML_DIR="$BASE/supertonic-coreml"  # CoreML (macOS)
++SUPERTONIC_COREML_VENV="$SUPERTONIC_COREML_DIR/.venv"
 +SUPERTONIC_PORT="${SUPERTONIC_PORT:-8766}"
 +
 +case "$(uname -s 2>/dev/null || echo unknown)" in
@@ -659,34 +723,73 @@ index 00000000..b459b49d
 +SKIP_PARAKEET=false
 +SKIP_SUPERTONIC=false
 +VENV_ONLY=false
-+for arg in "$@"; do
-+    case "$arg" in
++ASSUME_YES=false
++ACCEL=""
++while [ $# -gt 0 ]; do
++    case "$1" in
 +        --skip-parakeet)   SKIP_PARAKEET=true ;;
 +        --skip-supertonic) SKIP_SUPERTONIC=true ;;
 +        --venv-only)       VENV_ONLY=true ;;
-+        -h|--help)
-+            grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
++        --yes|-y)          ASSUME_YES=true ;;
++        --accel)           ACCEL="$2"; shift ;;
++        --accel=*)         ACCEL="${1#*=}" ;;
++        -h|--help)         grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 +    esac
++    shift
 +done
 +
++# --- Acceleration selection --------------------------------------------------
++has_nvidia() { command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; }
++
++detect_default_accel() {
++    if [ "$PLATFORM" = "macos" ]; then echo coreml
++    elif [ "$PLATFORM" = "linux" ] && has_nvidia; then echo cuda
++    else echo cpu
++    fi
++}
++
++DEFAULT_ACCEL="$(detect_default_accel)"
++[ -z "$ACCEL" ] && ACCEL=auto
++
++# Interactive prompt unless --yes / --accel given and a terminal is attached.
++if [ "$ACCEL" = "auto" ] && [ "$ASSUME_YES" = false ] && { [ -t 0 ] || [ -e /dev/tty ]; }; then
++    echo "" >&2
++    info "Select speech-backend acceleration (detected default: $DEFAULT_ACCEL):"
++    echo "    [1] cpu     — portable, CPU only" >&2
++    echo "    [2] cuda    — NVIDIA GPU (Linux)" >&2
++    echo "    [3] coreml  — Apple Neural Engine (macOS)" >&2
++    printf "  Choice [1/2/3] (Enter for %s): " "$DEFAULT_ACCEL" >&2
++    read -r _choice < /dev/tty || _choice=""
++    case "$_choice" in
++        1) ACCEL=cpu ;; 2) ACCEL=cuda ;; 3) ACCEL=coreml ;;
++        "") ACCEL="$DEFAULT_ACCEL" ;;
++        cpu|cuda|coreml) ACCEL="$_choice" ;;
++        *) warn "Unrecognized '$_choice' — using $DEFAULT_ACCEL"; ACCEL="$DEFAULT_ACCEL" ;;
++    esac
++fi
++[ "$ACCEL" = "auto" ] && ACCEL="$DEFAULT_ACCEL"
++
++# Validate against platform; fall back gracefully.
++if [ "$ACCEL" = "coreml" ] && [ "$PLATFORM" != "macos" ]; then
++    warn "coreml is macOS-only — falling back to cpu"; ACCEL=cpu
++fi
++if [ "$ACCEL" = "cuda" ] && ! has_nvidia; then
++    warn "no NVIDIA GPU detected — falling back to cpu"; ACCEL=cpu
++fi
++info "Acceleration: $ACCEL"
++
 +mkdir -p "$BASE"
++echo "$ACCEL" > "$BASE/accel"
 +
 +# --- Step 1: voice core venv (VAD + mic) -------------------------------------
 +if [ ! -d "$VENV_DIR" ]; then
 +    info "Creating voice venv at $VENV_DIR..."
 +    python3.12 -m venv "$VENV_DIR" 2>/dev/null || python3 -m venv "$VENV_DIR"
 +fi
-+
 +info "Installing voice core dependencies (Silero VAD, sounddevice)..."
 +"$VENV_DIR/bin/pip" install --quiet --upgrade pip setuptools wheel 2>/dev/null
 +"$VENV_DIR/bin/pip" install --quiet \
-+    silero-vad \
-+    sounddevice \
-+    onnxruntime \
-+    torch \
-+    torchaudio \
-+    numpy \
-+    2>&1 | grep -v "^$" || true
++    silero-vad sounddevice onnxruntime torch torchaudio numpy 2>&1 | grep -v "^$" || true
 +ok "Voice core dependencies installed"
 +
 +if [ "$VENV_ONLY" = true ]; then
@@ -697,7 +800,7 @@ index 00000000..b459b49d
 +# --- Step 2: Parakeet STT backend (:5093) ------------------------------------
 +install_parakeet() {
 +    [ "$SKIP_PARAKEET" = true ] && { info "Skipping Parakeet STT"; return; }
-+    info "── Parakeet STT backend (ONNX, CPU) ──"
++    info "── Parakeet STT backend (ONNX, accel=$ACCEL) ──"
 +    if [ -d "$PARAKEET_DIR/.git" ]; then
 +        git -C "$PARAKEET_DIR" pull --ff-only 2>&1 | sed 's/^/  /' || true
 +    else
@@ -707,26 +810,27 @@ index 00000000..b459b49d
 +    [ -d "$PARAKEET_VENV" ] || python3 -m venv "$PARAKEET_VENV"
 +    "$PARAKEET_VENV/bin/pip" install --quiet --upgrade pip 2>/dev/null
 +
-+    if [ "$PLATFORM" = "macos" ]; then
-+        sed 's/onnxruntime-gpu==1.26.0/onnxruntime/' "$PARAKEET_DIR/requirements.txt" > "$PARAKEET_DIR/requirements-darwin.txt"
-+        REQ_FILE="$PARAKEET_DIR/requirements-darwin.txt"
++    # Pick the onnxruntime variant for the chosen acceleration.
++    if [ "$ACCEL" = "cuda" ]; then
++        REQ_FILE="$PARAKEET_DIR/requirements.txt"   # already pins onnxruntime-gpu
 +    else
-+        REQ_FILE="$PARAKEET_DIR/requirements.txt"
++        # cpu and coreml both use the plain onnxruntime wheel (macOS wheel ships
++        # the CoreML execution provider).
++        sed 's/onnxruntime-gpu[^ ]*/onnxruntime/' "$PARAKEET_DIR/requirements.txt" > "$PARAKEET_DIR/requirements-ollama.txt"
++        REQ_FILE="$PARAKEET_DIR/requirements-ollama.txt"
 +    fi
 +    "$PARAKEET_VENV/bin/pip" install --quiet -r "$REQ_FILE" 2>&1 | grep -v "^$" || true
 +    "$PARAKEET_VENV/bin/pip" install --quiet \
 +        uvicorn[standard] fastapi python-multipart silero-vad 2>&1 | grep -v "^$" || true
-+    # Python 3.13 dropped stdlib audioop; audioop-lts is the official backport.
 +    if "$PARAKEET_VENV/bin/python" -c 'import sys; sys.exit(0 if sys.version_info >= (3,13) else 1)'; then
 +        "$PARAKEET_VENV/bin/pip" install --quiet audioop-lts 2>&1 | grep -v "^$" || true
 +    fi
 +    ok "Parakeet STT installed"
 +}
 +
-+# --- Step 3: Supertonic TTS backend (:8766) ----------------------------------
-+install_supertonic() {
-+    [ "$SKIP_SUPERTONIC" = true ] && { info "Skipping Supertonic TTS"; return; }
-+    info "── Supertonic TTS backend (ONNX, CPU) ──"
++# --- Step 3a: Supertonic ONNX backend (cpu / cuda) ---------------------------
++install_supertonic_onnx() {
++    info "── Supertonic TTS backend (ONNX, accel=$ACCEL) ──"
 +    if [ -d "$SUPERTONIC_DIR/.git" ]; then
 +        git -C "$SUPERTONIC_DIR" pull --ff-only 2>&1 | sed 's/^/  /' || true
 +    else
@@ -736,6 +840,9 @@ index 00000000..b459b49d
 +    [ -d "$SUPERTONIC_VENV" ] || python3 -m venv "$SUPERTONIC_VENV"
 +    "$SUPERTONIC_VENV/bin/pip" install --quiet --upgrade pip 2>/dev/null
 +    "$SUPERTONIC_VENV/bin/pip" install --quiet -r "$SUPERTONIC_DIR/py/requirements.txt" 2>&1 | grep -v "^$" || true
++    if [ "$ACCEL" = "cuda" ]; then
++        "$SUPERTONIC_VENV/bin/pip" install --quiet onnxruntime-gpu 2>&1 | grep -v "^$" || true
++    fi
 +    "$SUPERTONIC_VENV/bin/pip" install --quiet huggingface-hub transformers 2>&1 | grep -v "^$" || true
 +
 +    local ONNX_DIR="$SUPERTONIC_DIR/assets"
@@ -747,7 +854,37 @@ index 00000000..b459b49d
 +snapshot_download('onnx-community/Supertonic-TTS-2-ONNX', local_dir='$ONNX_DIR', ignore_patterns=['*.md','.gitattributes'])
 +" || warn "Model download failed — re-run setup to retry"
 +    fi
-+    ok "Supertonic TTS installed"
++    ok "Supertonic TTS (ONNX) installed"
++}
++
++# --- Step 3b: Supertonic CoreML backend (macOS Apple Neural Engine) ----------
++# Mirrors the reference Mac's known-good config: supertonic-3-coreml-chunked
++# run with --compute-units CPU_AND_NE and the F4 voice style.
++install_supertonic_coreml() {
++    info "── Supertonic TTS backend (CoreML / Apple Neural Engine) ──"
++    if ! command -v git-lfs >/dev/null 2>&1; then
++        warn "git-lfs not found — CoreML model weights may not download."
++        warn "Install with: brew install git-lfs && git lfs install"
++    else
++        git lfs install >/dev/null 2>&1 || true
++    fi
++    if [ -d "$SUPERTONIC_COREML_DIR/.git" ]; then
++        git -C "$SUPERTONIC_COREML_DIR" pull --ff-only 2>&1 | sed 's/^/  /' || true
++    else
++        rm -rf "$SUPERTONIC_COREML_DIR"
++        git clone https://github.com/groxaxo/supertonic-3-coreml-chunked "$SUPERTONIC_COREML_DIR" 2>&1 | sed 's/^/  /'
++    fi
++    if [ ! -d "$SUPERTONIC_COREML_VENV" ]; then
++        python3.11 -m venv "$SUPERTONIC_COREML_VENV" 2>/dev/null || python3 -m venv "$SUPERTONIC_COREML_VENV"
++    fi
++    "$SUPERTONIC_COREML_VENV/bin/pip" install --quiet --upgrade pip 2>/dev/null
++    "$SUPERTONIC_COREML_VENV/bin/pip" install --quiet -r "$SUPERTONIC_COREML_DIR/requirements.txt" 2>&1 | grep -v "^$" || true
++    ok "Supertonic TTS (CoreML) installed"
++}
++
++install_supertonic() {
++    [ "$SKIP_SUPERTONIC" = true ] && { info "Skipping Supertonic TTS"; return; }
++    if [ "$ACCEL" = "coreml" ]; then install_supertonic_coreml; else install_supertonic_onnx; fi
 +}
 +
 +install_parakeet & PK_PID=$!
@@ -755,6 +892,9 @@ index 00000000..b459b49d
 +wait $PK_PID $ST_PID
 +
 +# --- Step 4: auto-start services ---------------------------------------------
++PARAKEET_USE_GPU=false
++[ "$ACCEL" = "cuda" ] && PARAKEET_USE_GPU=true
++
 +if [ "$PLATFORM" = "linux" ]; then
 +    info "── Linux systemd --user services ──"
 +    UNIT_DIR="${HOME}/.config/systemd/user"
@@ -763,7 +903,7 @@ index 00000000..b459b49d
 +    if [ "$SKIP_PARAKEET" = false ] && [ -d "$PARAKEET_DIR" ]; then
 +        cat > "$UNIT_DIR/ollama-parakeet-stt.service" <<SVC
 +[Unit]
-+Description=Ollama voice — Parakeet STT (ONNX, CPU) on :${PARAKEET_PORT}
++Description=Ollama voice — Parakeet STT (accel=${ACCEL}) on :${PARAKEET_PORT}
 +After=network.target
 +
 +[Service]
@@ -774,7 +914,7 @@ index 00000000..b459b49d
 +RestartSec=5
 +Environment=HOME=${HOME}
 +Environment=PARAKEET_PORT=${PARAKEET_PORT}
-+Environment=PARAKEET_USE_GPU=false
++Environment=PARAKEET_USE_GPU=${PARAKEET_USE_GPU}
 +Environment=PARAKEET_DEFAULT_MODEL=parakeet-tdt-0.6b-v3
 +StandardOutput=append:${BASE}/parakeet-stt.log
 +StandardError=append:${BASE}/parakeet-stt.log
@@ -786,9 +926,10 @@ index 00000000..b459b49d
 +    fi
 +
 +    if [ "$SKIP_SUPERTONIC" = false ] && [ -d "$SUPERTONIC_DIR" ]; then
++        SUPERTONIC_USE_GPU=false; [ "$ACCEL" = "cuda" ] && SUPERTONIC_USE_GPU=true
 +        cat > "$UNIT_DIR/ollama-supertonic.service" <<SVC
 +[Unit]
-+Description=Ollama voice — Supertonic TTS (ONNX, CPU) on :${SUPERTONIC_PORT}
++Description=Ollama voice — Supertonic TTS (accel=${ACCEL}) on :${SUPERTONIC_PORT}
 +After=network.target
 +
 +[Service]
@@ -801,7 +942,7 @@ index 00000000..b459b49d
 +Environment=HOME=${HOME}
 +Environment=ONNX_DIR=${SUPERTONIC_DIR}/assets
 +Environment=VOICE_STYLES_DIR=${SUPERTONIC_DIR}/assets
-+Environment=USE_GPU=false
++Environment=USE_GPU=${SUPERTONIC_USE_GPU}
 +Environment=LOG_LEVEL=INFO
 +StandardOutput=append:${BASE}/supertonic.log
 +StandardError=append:${BASE}/supertonic.log
@@ -852,7 +993,35 @@ index 00000000..b459b49d
 +        ok "loaded com.ollama.voice.parakeet-stt"
 +    fi
 +
-+    if [ "$SKIP_SUPERTONIC" = false ] && [ -d "$SUPERTONIC_DIR" ]; then
++    if [ "$SKIP_SUPERTONIC" = false ] && [ "$ACCEL" = "coreml" ] && [ -d "$SUPERTONIC_COREML_DIR" ]; then
++        # Mirror the reference Mac: Supertonic-3 CoreML on CPU_AND_NE, voice F4.
++        cat > "$LAUNCHD_DIR/com.ollama.voice.supertonic.plist" <<PLIST
++<?xml version="1.0" encoding="UTF-8"?>
++<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
++<plist version="1.0"><dict>
++    <key>Label</key><string>com.ollama.voice.supertonic</string>
++    <key>ProgramArguments</key><array>
++        <string>$SUPERTONIC_COREML_VENV/bin/python</string>
++        <string>$SUPERTONIC_COREML_DIR/server/supertonic_http_server.py</string>
++        <string>--host</string><string>0.0.0.0</string>
++        <string>--port</string><string>$SUPERTONIC_PORT</string>
++        <string>--model-dir</string><string>$SUPERTONIC_COREML_DIR</string>
++        <string>--compute-units</string><string>CPU_AND_NE</string>
++        <string>--voice-style</string><string>voice_styles/F4.json</string>
++    </array>
++    <key>EnvironmentVariables</key><dict>
++        <key>HOME</key><string>$HOME</string>
++        <key>PYTHONUNBUFFERED</key><string>1</string>
++    </dict>
++    <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
++    <key>StandardOutPath</key><string>$BASE/supertonic.log</string>
++    <key>StandardErrorPath</key><string>$BASE/supertonic.log</string>
++    <key>WorkingDirectory</key><string>$SUPERTONIC_COREML_DIR</string>
++</dict></plist>
++PLIST
++        launchctl load -w "$LAUNCHD_DIR/com.ollama.voice.supertonic.plist" 2>/dev/null || true
++        ok "loaded com.ollama.voice.supertonic (CoreML, CPU_AND_NE)"
++    elif [ "$SKIP_SUPERTONIC" = false ] && [ -d "$SUPERTONIC_DIR" ]; then
 +        cat > "$LAUNCHD_DIR/com.ollama.voice.supertonic.plist" <<PLIST
 +<?xml version="1.0" encoding="UTF-8"?>
 +<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -877,12 +1046,22 @@ index 00000000..b459b49d
 +</dict></plist>
 +PLIST
 +        launchctl load -w "$LAUNCHD_DIR/com.ollama.voice.supertonic.plist" 2>/dev/null || true
-+        ok "loaded com.ollama.voice.supertonic"
++        ok "loaded com.ollama.voice.supertonic (ONNX)"
 +    fi
 +fi
 +
++# --- Step 5: persist runtime env for the orchestrator ------------------------
++cat > "$BASE/voice.env" <<ENV
++# Written by ollama voice --setup (accel=$ACCEL). Loaded by the voice driver.
++OLLAMA_VOICE_ACCEL=$ACCEL
++STT_URL=http://127.0.0.1:${PARAKEET_PORT}/v1/audio/transcriptions
++STT_MODEL=parakeet-tdt-0.6b-v3
++SUPERTONIC_URL=http://127.0.0.1:${SUPERTONIC_PORT}
++TTS_ENGINE=supertonic
++ENV
++
 +echo
-+ok "Voice backends installed under $BASE"
++ok "Voice backends installed under $BASE (acceleration: $ACCEL)"
 +info "STT: http://127.0.0.1:${PARAKEET_PORT}   TTS: http://127.0.0.1:${SUPERTONIC_PORT}"
 +info "Now run:  ollama voice <model>   (e.g. ollama voice llama3.2)"
 diff --git a/voice/scripts/talk.ps1 b/voice/scripts/talk.ps1
@@ -2552,10 +2731,10 @@ index 00000000..23937dbe
 +    main()
 diff --git a/voice/voice.go b/voice/voice.go
 new file mode 100644
-index 00000000..cfcebf1f
+index 00000000..e49590a5
 --- /dev/null
 +++ b/voice/voice.go
-@@ -0,0 +1,287 @@
+@@ -0,0 +1,339 @@
 +// Package voice drives a local, CPU-only speech pipeline (Silero VAD ->
 +// Parakeet STT -> Supertonic TTS) so the CLI can hold a spoken conversation
 +// with a model. The heavy lifting lives in a small set of Bash/Python scripts
@@ -2711,14 +2890,57 @@ index 00000000..cfcebf1f
 +	return exec.CommandContext(ctx, "bash", args...)
 +}
 +
-+// setupCommand builds the backend installer command for the current OS.
-+func setupCommand(ctx context.Context) *exec.Cmd {
++// setupCommand builds the backend installer command for the current OS,
++// translating the cross-platform flags (--accel/--yes) to PowerShell on Windows.
++func setupCommand(ctx context.Context, accel string, yes bool) *exec.Cmd {
 +	if runtime.GOOS == "windows" {
-+		return exec.CommandContext(ctx, "powershell",
++		args := []string{
 +			"-NoProfile", "-ExecutionPolicy", "Bypass",
-+			"-File", filepath.Join(scriptsDir(), "setup.ps1"))
++			"-File", filepath.Join(scriptsDir(), "setup.ps1"),
++			"-Accel", accel,
++		}
++		if yes {
++			args = append(args, "-Yes")
++		}
++		return exec.CommandContext(ctx, "powershell", args...)
 +	}
-+	return exec.CommandContext(ctx, "bash", filepath.Join(scriptsDir(), "setup.sh"))
++	args := []string{filepath.Join(scriptsDir(), "setup.sh"), "--accel", accel}
++	if yes {
++		args = append(args, "--yes")
++	}
++	return exec.CommandContext(ctx, "bash", args...)
++}
++
++// loadVoiceEnv parses the key=value file the installer writes at $BASE/voice.env
++// (acceleration choice and the resolved backend URLs). Missing file → empty map.
++func loadVoiceEnv() map[string]string {
++	m := map[string]string{}
++	data, err := os.ReadFile(filepath.Join(Root(), "voice.env"))
++	if err != nil {
++		return m
++	}
++	for _, line := range strings.Split(string(data), "\n") {
++		line = strings.TrimSpace(line)
++		if line == "" || strings.HasPrefix(line, "#") {
++			continue
++		}
++		if k, v, ok := strings.Cut(line, "="); ok {
++			m[strings.TrimSpace(k)] = strings.TrimSpace(v)
++		}
++	}
++	return m
++}
++
++// resolveURL returns the user's env value, then the installer's voice.env value,
++// then the built-in default.
++func resolveURL(key, def string) string {
++	if v := os.Getenv(key); v != "" {
++		return v
++	}
++	if v := loadVoiceEnv()[key]; v != "" {
++		return v
++	}
++	return def
 +}
 +
 +// scriptEnv builds the environment for the scripts, pointing them at the
@@ -2727,15 +2949,25 @@ index 00000000..cfcebf1f
 +func scriptEnv(extra ...string) []string {
 +	dir := scriptsDir()
 +	env := os.Environ()
++
++	// Apply the installer's voice.env (accel, backend URLs, TTS engine) for any
++	// key the user hasn't overridden in their own environment.
++	fileEnv := loadVoiceEnv()
++	for k, v := range fileEnv {
++		if os.Getenv(k) == "" {
++			env = append(env, k+"="+v)
++		}
++	}
++
 +	env = append(env,
 +		"PYTHON="+pythonPath(),
 +		"TTS_SH="+filepath.Join(dir, "tts.sh"),
 +		"TTS_LANG_SH="+filepath.Join(dir, "tts_lang.sh"),
 +	)
-+	if os.Getenv("STT_URL") == "" {
++	if os.Getenv("STT_URL") == "" && fileEnv["STT_URL"] == "" {
 +		env = append(env, "STT_URL="+defaultSTTURL)
 +	}
-+	if os.Getenv("SUPERTONIC_URL") == "" {
++	if os.Getenv("SUPERTONIC_URL") == "" && fileEnv["SUPERTONIC_URL"] == "" {
 +		env = append(env, "SUPERTONIC_URL="+defaultSupertonicURL)
 +	}
 +	return append(env, extra...)
@@ -2795,14 +3027,8 @@ index 00000000..cfcebf1f
 +// used to print a helpful "run ollama voice --setup" hint instead of failing
 +// deep inside a script.
 +func Available() bool {
-+	stt := os.Getenv("STT_URL")
-+	if stt == "" {
-+		stt = defaultSTTURL
-+	}
-+	tts := os.Getenv("SUPERTONIC_URL")
-+	if tts == "" {
-+		tts = defaultSupertonicURL
-+	}
++	stt := resolveURL("STT_URL", defaultSTTURL)
++	tts := resolveURL("SUPERTONIC_URL", defaultSupertonicURL)
 +	return reachable(stt) && reachable(tts)
 +}
 +
@@ -2829,11 +3055,16 @@ index 00000000..cfcebf1f
 +
 +// Setup runs the embedded installer, which creates the voice venv and installs
 +// and starts the Parakeet (STT) and Supertonic (TTS) backends under Root().
-+func Setup(ctx context.Context) error {
++// accel selects the acceleration path (auto|cpu|cuda|coreml); yes skips the
++// interactive prompt and accepts the auto-detected default.
++func Setup(ctx context.Context, accel string, yes bool) error {
 +	if err := ensureScripts(); err != nil {
 +		return err
 +	}
-+	cmd := setupCommand(ctx)
++	if accel == "" {
++		accel = "auto"
++	}
++	cmd := setupCommand(ctx, accel, yes)
 +	cmd.Env = scriptEnv()
 +	cmd.Stdout = os.Stderr
 +	cmd.Stderr = os.Stderr
