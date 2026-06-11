@@ -1,4 +1,4 @@
-From 391945b90722b4b45fc8e8f121c52054c3fd104f Mon Sep 17 00:00:00 2001
+From 2348dd619df509ca37a2c038e2fd6d5e65636664 Mon Sep 17 00:00:00 2001
 From: opencode <facundovladimir@gmail.com>
 Date: Thu, 11 Jun 2026 18:03:30 +1200
 Subject: [PATCH] cmd: add `ollama voice` to talk to models with speech
@@ -24,14 +24,14 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
  cmd/voice.go                  | 166 ++++++++++
  docs/voice.md                 |  98 ++++++
  voice/scripts/setup.ps1       | 192 ++++++++++++
- voice/scripts/setup.sh        | 388 ++++++++++++++++++++++++
+ voice/scripts/setup.sh        | 421 +++++++++++++++++++++++++
  voice/scripts/talk.ps1        | 274 +++++++++++++++++
  voice/scripts/talk.sh         | 556 ++++++++++++++++++++++++++++++++++
  voice/scripts/tts.sh          | 309 +++++++++++++++++++
  voice/scripts/tts_lang.sh     |  59 ++++
  voice/scripts/vad_recorder.py | 437 ++++++++++++++++++++++++++
  voice/voice.go                | 339 +++++++++++++++++++++
- 13 files changed, 2893 insertions(+), 1 deletion(-)
+ 13 files changed, 2926 insertions(+), 1 deletion(-)
  create mode 100644 cmd/voice.go
  create mode 100644 docs/voice.md
  create mode 100644 voice/scripts/setup.ps1
@@ -672,10 +672,10 @@ index 00000000..fcc5822e
 +info "Now run:  ollama voice <model>   (e.g. ollama voice llama3.2)"
 diff --git a/voice/scripts/setup.sh b/voice/scripts/setup.sh
 new file mode 100755
-index 00000000..dae6d5ba
+index 00000000..bdfaf8f3
 --- /dev/null
 +++ b/voice/scripts/setup.sh
-@@ -0,0 +1,388 @@
+@@ -0,0 +1,421 @@
 +#!/bin/bash
 +# setup.sh — installs the local speech backends for `ollama voice`.
 +#
@@ -860,22 +860,55 @@ index 00000000..dae6d5ba
 +# --- Step 3b: Supertonic CoreML backend (macOS Apple Neural Engine) ----------
 +# Mirrors the reference Mac's known-good config: supertonic-3-coreml-chunked
 +# run with --compute-units CPU_AND_NE and the F4 voice style.
++
++# The CoreML server needs Python 3.11. Look on PATH, then common Homebrew / uv /
++# pyenv locations (uv-managed 3.11 is what the reference Mac uses).
++find_python311() {
++    command -v python3.11 2>/dev/null && return 0
++    for p in /opt/homebrew/bin/python3.11 /usr/local/bin/python3.11 \
++             "$HOME"/.local/share/uv/python/cpython-3.11-*/bin/python3.11 \
++             "$HOME"/.pyenv/versions/3.11*/bin/python3.11; do
++        [ -x "$p" ] && { echo "$p"; return 0; }
++    done
++    return 1
++}
++
 +install_supertonic_coreml() {
 +    info "── Supertonic TTS backend (CoreML / Apple Neural Engine) ──"
-+    if ! command -v git-lfs >/dev/null 2>&1; then
-+        warn "git-lfs not found — CoreML model weights may not download."
-+        warn "Install with: brew install git-lfs && git lfs install"
-+    else
-+        git lfs install >/dev/null 2>&1 || true
++
++    # git-lfs is required to fetch the CoreML model weights (.mlmodelc bins).
++    if ! command -v git-lfs >/dev/null 2>&1 && command -v brew >/dev/null 2>&1; then
++        info "Installing git-lfs via Homebrew..."
++        brew install git-lfs 2>&1 | sed 's/^/  /' || warn "brew install git-lfs failed"
 +    fi
++    if command -v git-lfs >/dev/null 2>&1; then
++        git lfs install >/dev/null 2>&1 || true
++    else
++        warn "git-lfs unavailable — CoreML weights may be missing. Install: brew install git-lfs"
++    fi
++
 +    if [ -d "$SUPERTONIC_COREML_DIR/.git" ]; then
 +        git -C "$SUPERTONIC_COREML_DIR" pull --ff-only 2>&1 | sed 's/^/  /' || true
++        command -v git-lfs >/dev/null 2>&1 && git -C "$SUPERTONIC_COREML_DIR" lfs pull 2>/dev/null || true
 +    else
 +        rm -rf "$SUPERTONIC_COREML_DIR"
 +        git clone https://github.com/groxaxo/supertonic-3-coreml-chunked "$SUPERTONIC_COREML_DIR" 2>&1 | sed 's/^/  /'
 +    fi
++
 +    if [ ! -d "$SUPERTONIC_COREML_VENV" ]; then
-+        python3.11 -m venv "$SUPERTONIC_COREML_VENV" 2>/dev/null || python3 -m venv "$SUPERTONIC_COREML_VENV"
++        PY311="$(find_python311 || true)"
++        if [ -z "$PY311" ] && command -v brew >/dev/null 2>&1; then
++            info "Installing python@3.11 via Homebrew..."
++            brew install python@3.11 2>&1 | sed 's/^/  /' || true
++            PY311="$(find_python311 || true)"
++        fi
++        if [ -n "$PY311" ]; then
++            info "CoreML venv using $("$PY311" --version 2>&1)"
++            "$PY311" -m venv "$SUPERTONIC_COREML_VENV"
++        else
++            warn "python3.11 not found — using $(python3 --version 2>&1); CoreML deps may fail"
++            python3 -m venv "$SUPERTONIC_COREML_VENV"
++        fi
 +    fi
 +    "$SUPERTONIC_COREML_VENV/bin/pip" install --quiet --upgrade pip 2>/dev/null
 +    "$SUPERTONIC_COREML_VENV/bin/pip" install --quiet -r "$SUPERTONIC_COREML_DIR/requirements.txt" 2>&1 | grep -v "^$" || true
