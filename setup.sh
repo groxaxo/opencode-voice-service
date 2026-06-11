@@ -221,7 +221,9 @@ fi
 if [ ! -d "$VENV_DIR" ]; then
     info "Creating Python 3.12 venv at $VENV_DIR..."
     if command -v uv &>/dev/null; then
-        uv venv --python 3.12 "$VENV_DIR" 2>/dev/null || uv venv "$VENV_DIR" 2>/dev/null || {
+        # --seed installs pip/setuptools/wheel into the venv; without it
+        # `uv venv` creates a pip-less venv and the pip install below fails (exit 127).
+        uv venv --seed --python 3.12 "$VENV_DIR" 2>/dev/null || uv venv --seed "$VENV_DIR" 2>/dev/null || {
             python3.12 -m venv "$VENV_DIR" 2>/dev/null || python3 -m venv "$VENV_DIR"
         }
     elif python3.12 -m venv "$VENV_DIR" 2>/dev/null; then
@@ -302,7 +304,18 @@ install_parakeet() {
         silero-vad \
         2>&1 | grep -v "^$" || true
 
+    # Python 3.13 removed the stdlib `audioop` module that the STT backend
+    # imports; audioop-lts is the official drop-in backport for 3.13+.
+    if "$PARAKEET_VENV/bin/python" -c 'import sys; sys.exit(0 if sys.version_info >= (3,13) else 1)'; then
+        "$PARAKEET_VENV/bin/pip" install --quiet audioop-lts 2>&1 | grep -v "^$" || true
+    fi
+
     ok "Parakeet dependencies installed"
+
+    # launchd is macOS-only; Linux auto-start is handled by systemd (Step 7c).
+    if [ "$PLATFORM" != "macos" ]; then
+        return
+    fi
 
     # Install launchd plist
     info "Installing Parakeet launchd plist..."
@@ -420,13 +433,18 @@ install_supertonic() {
         mkdir -p "$ONNX_DIR"
         "$SUPERTONIC_VENV/bin/python" -c "
 from huggingface_hub import snapshot_download
-print('Downloading Supertonic-TTS-3-ONNX from Hugging Face...')
-snapshot_download('onnx-community/Supertonic-TTS-3-ONNX', local_dir='$ONNX_DIR', ignore_patterns=['*.md','.gitattributes'])
+print('Downloading Supertonic-TTS-2-ONNX from Hugging Face...')
+snapshot_download('onnx-community/Supertonic-TTS-2-ONNX', local_dir='$ONNX_DIR', ignore_patterns=['*.md','.gitattributes'])
 print('Model download complete.')
 " || warn "Model download failed — run setup.sh again or download manually"
         ok "Supertonic ONNX model downloaded to $ONNX_DIR"
     else
         ok "Supertonic ONNX model already present at $ONNX_DIR"
+    fi
+
+    # launchd is macOS-only; Linux auto-start is handled by systemd (Step 7c).
+    if [ "$PLATFORM" != "macos" ]; then
+        return
     fi
 
     # Install launchd plist
@@ -534,7 +552,7 @@ ok "TTS wrapper + lang helper installed to $CONFIG_DIR"
 # preserved unless --force is passed. This protects pre-existing services
 # (e.g. a working speech-server install on com.opencode.parakeet-stt, or
 # a custom TTS engine on com.opencode.tts-server) from being clobbered.
-if [ -d "$REPO_DIR/launchd" ]; then
+if [ "$PLATFORM" = "macos" ] && [ -d "$REPO_DIR/launchd" ]; then
     for src_plist in "$REPO_DIR"/launchd/*.plist; do
         [ -f "$src_plist" ] || continue
         name=$(basename "$src_plist")
@@ -592,6 +610,12 @@ install_agent_integration() {
     local target_dir="$2"
     local enabled="$3"
     if [ "$enabled" != "true" ]; then
+        return
+    fi
+    # Skip if target is the canonical skill dir itself (OpenCode CLI case):
+    # it's already populated, and cp'ing a dir onto itself errors out.
+    if [ "$(cd "$target_dir" 2>/dev/null && pwd)" = "$(cd "$SKILL_DIR" 2>/dev/null && pwd)" ]; then
+        ok "Integration: $name  →  $target_dir (already installed)"
         return
     fi
     # Create target directory and copy/link skill files
@@ -695,8 +719,9 @@ SVCEOF
 fi
 
 # =============================================================================
-# Step 8: Load launchd services (start them if not running)
+# Step 8: Load launchd services (start them if not running) — macOS only
 # =============================================================================
+if [ "$PLATFORM" = "macos" ]; then
 info "Loading launchd services..."
 launchctl_load_or_kick() {
     local label="$1"
@@ -716,6 +741,7 @@ launchctl_load_or_kick() {
 launchctl_load_or_kick "com.opencode.parakeet-stt"
 launchctl_load_or_kick "com.opencode.supertonic"
 launchctl_load_or_kick "com.opencode.tts-server"
+fi
 
 # =============================================================================
 # Summary
@@ -728,9 +754,17 @@ echo "  VAD engine:    $SKILL_DIR/vad_recorder.py"
 echo "  TTS CLI:       $CONFIG_DIR/tts.sh"
 echo "  Voice venv:    $VENV_DIR"
 echo ""
-echo "  Backends (launchd auto-start):"
-echo "    STT — Parakeet ONNX       :${PARAKEET_PORT}  $(launchctl list 2>/dev/null | grep -q com.opencode.parakeet-stt && echo '✓ loaded' || echo 'not loaded')  log: ${CONFIG_DIR}/parakeet-stt.log"
-echo "    TTS — Supertonic ONNX     :${SUPERTONIC_PORT}  $(launchctl list 2>/dev/null | grep -q com.opencode.supertonic && echo '✓ loaded' || echo 'not loaded')  log: ${CONFIG_DIR}/supertonic.log"
+if [ "$PLATFORM" = "linux" ]; then
+    pk_state=$(systemctl --user is-active opencode-parakeet-stt.service 2>/dev/null || echo inactive)
+    st_state=$(systemctl --user is-active opencode-supertonic.service 2>/dev/null || echo inactive)
+    echo "  Backends (systemd --user auto-start):"
+    echo "    STT — Parakeet ONNX       :${PARAKEET_PORT}  ${pk_state}  log: ${CONFIG_DIR}/parakeet-stt.log"
+    echo "    TTS — Supertonic ONNX     :${SUPERTONIC_PORT}  ${st_state}  log: ${CONFIG_DIR}/supertonic.log"
+else
+    echo "  Backends (launchd auto-start):"
+    echo "    STT — Parakeet ONNX       :${PARAKEET_PORT}  $(launchctl list 2>/dev/null | grep -q com.opencode.parakeet-stt && echo '✓ loaded' || echo 'not loaded')  log: ${CONFIG_DIR}/parakeet-stt.log"
+    echo "    TTS — Supertonic ONNX     :${SUPERTONIC_PORT}  $(launchctl list 2>/dev/null | grep -q com.opencode.supertonic && echo '✓ loaded' || echo 'not loaded')  log: ${CONFIG_DIR}/supertonic.log"
+fi
 echo ""
 echo "  Quick test:"
 echo "    $SKILL_DIR/talk.sh status"

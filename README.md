@@ -1,7 +1,7 @@
 # OpenCode Voice Service
 
 **Local voice conversation for AI agents — 100% CPU-only, no GPU required.**  
-One-command setup installs the full voice pipeline: [Silero VAD](https://github.com/snakers4/silero-vad) for speech detection, [Parakeet TDT 0.6B](https://github.com/groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai) for ONNX transcription, and [Supertonic TTS 3](https://github.com/groxaxo/supertonic-express) for ONNX synthesis — **all running locally on CPU, no cloud required**.
+One-command setup installs the full voice pipeline: [Silero VAD](https://github.com/snakers4/silero-vad) for speech detection, [Parakeet TDT 0.6B](https://github.com/groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai) for ONNX transcription, and [Supertonic TTS 2](https://github.com/groxaxo/supertonic-express) for ONNX synthesis — **all running locally on CPU, no cloud required**.
 
 Works out of the box with **Claude Code**, **OpenCode CLI**, **OpenClaw**, **Hermes Agent**, and **Codex**.
 
@@ -9,15 +9,40 @@ Works out of the box with **Claude Code**, **OpenCode CLI**, **OpenClaw**, **Her
 
 > **You don't need a GPU to get great voice performance.**
 
-All three engines in this stack are designed for CPU inference:
+All three engines in this stack are designed for CPU inference. The latency
+numbers below are **measured**, not estimated — see [Benchmarks](#benchmarks).
 
-| Engine | Runtime | CPU latency | Size |
-|--------|---------|-------------|------|
-| **Silero VAD** | ONNX (PyTorch) | ~5ms/frame on any CPU | 1.8MB |
-| **Parakeet TDT 0.6B** | ONNX INT8 | ~200–500ms on modern CPU | ~300MB |
-| **Supertonic TTS 3** | ONNX (quantized) | ~100–500ms on modern CPU | ~500MB |
+| Engine | Runtime | CPU latency (measured) | Download |
+|--------|---------|------------------------|----------|
+| **Silero VAD** | ONNX | ~0.1 ms/frame (32 ms audio per frame) | ~1.3 MB |
+| **Parakeet TDT 0.6B v3** | ONNX INT8 | ~280 ms for a short reply (8–21× realtime) | ~600 MB |
+| **Supertonic TTS 2** | ONNX | ~0.8 s for a short reply (3–13× realtime) | ~250 MB |
 
 The VAD and ONNX stack are optimized for Intel, AMD, and Apple Silicon CPUs. No CUDA, no ROCm, no GPU dependencies of any kind. The stack runs well on laptops, WSL, Docker containers, and CI machines.
+
+## Benchmarks
+
+Measured end-to-end on an **Intel Core i7-12700KF** (12-core/20-thread desktop
+CPU), all engines on **CPU only**, no GPU, with the default ONNX models:
+
+| Stage | Input | Latency (median of 5) | Speed vs realtime |
+|-------|-------|-----------------------|-------------------|
+| **Silero VAD** | one 512-sample frame (32 ms) | **0.09 ms** | ~350× |
+| **Parakeet STT** | 2.5 s utterance | **282 ms** | 8.9× |
+| **Parakeet STT** | 7.7 s utterance | **511 ms** | 15× |
+| **Parakeet STT** | 17 s utterance | **812 ms** | 21× |
+| **Supertonic TTS** | short reply (→2.5 s audio) | **777 ms** | 3.2× |
+| **Supertonic TTS** | medium reply (→7.7 s audio) | **944 ms** | 8.2× |
+| **Supertonic TTS** | long reply (→17 s audio) | **1.36 s** | 12.6× |
+
+So on a normal desktop CPU, the **voice overhead around your LLM is ~1–1.5 s**
+(STT + TTS); the slowest part of the loop is usually the LLM itself.
+
+**GPU?** You don't need one — that's the point. On the test machine both GPUs
+were fully committed to the local LLM (a vLLM tensor-parallel deployment), so the
+voice stack ran entirely on CPU and never touched VRAM. Parakeet *can* use
+`onnxruntime-gpu` (CUDA) if you have spare VRAM, but the design goal is to leave
+the GPU free for the model that's actually answering you.
 
 ## Architecture
 

@@ -70,7 +70,7 @@ sounddevice.InputStream ──▶ Silero VAD (ONNX) ──▶ Endpointer ──�
 - Local ONNX-based inference via [parakeet-tdt-0.6b-v3-fastapi-openai](https://github.com/groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai)
 - Auto-installed by `setup.sh` into `~/.config/opencode/parakeet-stt/`
 - launchd auto-start on `:5093`
-- INT8 quantized, ~20x real-time on Apple Silicon
+- INT8 quantized; measured 8–21× realtime on an Intel i7-12700KF (CPU only)
 - 25 languages, automatic language detection
 
 ## TTS Pipeline (Supertonic ONNX)
@@ -80,8 +80,8 @@ sounddevice.InputStream ──▶ Silero VAD (ONNX) ──▶ Endpointer ──�
   ──────────▶ http://127.0.0.1:8766/v1/audio/speech  (OpenAI-compatible)
   text + voice style + lang            │
                                         ▼
-  Supertonic-TTS-3-ONNX
-  (onnx-community/Supertonic-TTS-3-ONNX)
+  Supertonic-TTS-2-ONNX
+  (onnx-community/Supertonic-TTS-2-ONNX)
                                         │
                                         ▼
   WAV ──▶ afplay
@@ -91,7 +91,7 @@ sounddevice.InputStream ──▶ Silero VAD (ONNX) ──▶ Endpointer ──�
 - Auto-installed by `setup.sh` into `~/.config/opencode/supertonic-tts/`
 - launchd auto-start on `:8766` (`:8765` is reserved for the existing Chatterbox
   TTS server; both can coexist because they have different labels)
-- Ultra-fast: ~60x real-time on Apple Silicon
+- Fast: measured 3–13× realtime on an Intel i7-12700KF (CPU only)
 - Multilingual: EN, ES, KO, PT, FR
 
 ### TTS Fallback Chain
@@ -142,15 +142,19 @@ User speaks ◀─────────────────────�
 [afplay] audio output ─────────────────────────┘
 ```
 
-## Timings (Apple Silicon)
+## Timings
 
-| Stage | Latency (approx) |
+Measured on an Intel Core i7-12700KF (CPU only, no GPU); see the
+[Benchmarks](../README.md#benchmarks) table for the full set.
+
+| Stage | Latency (measured) |
 |-------|-----------------|
-| VAD endpointing | ~500ms trailing silence |
-| STT (Parakeet ONNX, local) | ~200–500ms |
-| TTS (Supertonic ONNX, local) | ~100–500ms |
+| VAD per-frame | ~0.09ms per 32ms frame (~350× realtime) |
+| VAD endpointing | ~500ms trailing silence (configurable) |
+| STT (Parakeet ONNX, local) | ~280ms short → ~810ms long (8–21× realtime) |
+| TTS (Supertonic ONNX, local) | ~0.8s short → ~1.4s long (3–13× realtime) |
 | TTS (xAI, cloud) | ~500–2000ms |
-| **E2E (speak → hear)** | **~1.5–3s** local, **~2.5–5s** cloud |
+| **E2E voice overhead (speak → hear, excl. LLM)** | **~1–1.5s** local |
 
 ## Install paths
 
