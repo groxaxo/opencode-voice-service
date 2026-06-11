@@ -60,6 +60,21 @@ The voice overhead around your LLM is **~1.5–2 s** (STT + TTS combined). In pr
 
 > Parakeet *can* use `onnxruntime-gpu` if you have spare VRAM — but the whole point is to leave the GPU for the model that’s answering you.
 
+### Apple Silicon (Apple M5)
+
+Measured on a MacBook Air (**Apple M5**), median of 3 runs. On Apple Silicon, TTS can run on the **Neural Engine** (`CPU_AND_NE`) while **ONNX Parakeet** handles STT.
+
+|Stage                              |Input            |Latency    |vs. realtime|
+|-----------------------------------|-----------------|-----------|------------|
+|**Parakeet STT** · ONNX (CPU)      |2.4 s utterance  |**0.26 s** |9×          |
+|**Parakeet STT** · ONNX (CPU)      |14.0 s utterance |**0.54 s** |26×         |
+|**Parakeet STT** · CoreML (ANE)    |2.4 s utterance  |**0.075 s**|33×         |
+|**Parakeet STT** · CoreML (ANE)    |14.0 s utterance |**1.23 s** |11×         |
+|**Supertonic 3** · CoreML (ANE)    |→ 1.2 s audio    |**0.16 s** |~7×         |
+|**Supertonic 3** · CoreML (ANE)    |→ 3.5 s audio    |**0.21 s** |16.6×       |
+
+On the Neural Engine, Supertonic 3 TTS synthesizes **8–30× faster than CPU ONNX**. For STT, ONNX Parakeet is *faster than the CoreML recognizer on longer audio* (0.54 s vs 1.23 s) and is identical across macOS/Linux/Windows — so it stays the default everywhere; the CoreML recognizer only edges ahead on very short clips (~0.075 s vs ~0.26 s), a gap well below conversational perception.
+
 ## Architecture
 
 ```
