@@ -486,7 +486,13 @@ print('  models:', ', '.join(h.get('available_models') or []))
         echo "  NOT REACHABLE"
     fi
     if [ "${STT_ENGINE}" != "remote" ]; then
-        if launchctl print "gui/$(id -u)/com.opencode.parakeet-stt" >/dev/null 2>&1; then
+        if [ "$(uname -s 2>/dev/null)" = "Linux" ]; then
+            if systemctl --user is-active --quiet opencode-parakeet-stt 2>/dev/null; then
+                echo "  systemd: opencode-parakeet-stt active"
+            else
+                echo "  systemd: opencode-parakeet-stt inactive (start: systemctl --user start opencode-parakeet-stt)"
+            fi
+        elif launchctl print "gui/$(id -u)/com.opencode.parakeet-stt" >/dev/null 2>&1; then
             echo "  launchd: com.opencode.parakeet-stt running"
         else
             echo "  launchd: com.opencode.parakeet-stt not loaded"
