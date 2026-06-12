@@ -121,8 +121,14 @@ import sys,json,re
 r=json.load(sys.stdin.buffer)
 c=r.get('message',{}).get('content','')
 if not c: sys.exit(1)
-c=re.sub(r'</?think>','',c)
-print(c.strip())
+# Strip chain-of-thought so it is never spoken: complete <think>..</think>
+# blocks, a stray leading close, and a truncated/unclosed trailing open.
+c=re.sub(r'<think>.*?</think>','',c,flags=re.S)
+c=re.sub(r'^.*?</think>','',c,flags=re.S)
+c=re.sub(r'<think>.*$','',c,flags=re.S)
+c=c.strip()
+if not c: sys.exit(1)
+print(c)
 "
 }
 
