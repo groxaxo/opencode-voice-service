@@ -13,8 +13,15 @@
 #   ./setup.sh --skip-supertonic        # skip Supertonic TTS installation
 #   ./setup.sh --venv-only              # only create the voice venv
 #   ./setup.sh --skip-voices            # skip reference voice generation
+#   ./setup.sh --gpu                    # use NVIDIA GPU for the voice stack (CUDA)
+#   ./setup.sh --cpu                    # force CPU even if a GPU is present
 #   ./setup.sh --force                  # overwrite existing plists (DESTRUCTIVE)
 #   ./setup.sh --uninstall              # remove everything installed by setup.sh
+#
+# Hardware autoselect: the installer detects OS (macOS/Linux) and accelerator.
+# On Linux with an NVIDIA GPU it asks whether to use CUDA (CPU if you decline or
+# run non-interactively). Apple Silicon and CPU-only hosts use ONNX on CPU, the
+# benchmarked-best path. --gpu / --cpu skip the prompt.
 #
 # Re-running setup.sh on an existing installation is SAFE by default:
 # existing plists, venvs, and cloned repos are preserved. Pass --force to
@@ -36,6 +43,26 @@ case "$OS" in
     Linux)  PLATFORM=linux ;;
     *)      PLATFORM=other ;;
 esac
+
+# --- Hardware / accelerator detection ----------------------------------------
+# The voice stack (Parakeet STT + Supertonic TTS) runs on ONNX Runtime. This
+# picks the best execution provider for the host:
+#   ACCEL=cuda  → Linux + NVIDIA GPU (onnxruntime-gpu, CUDA EP)
+#   ACCEL=cpu   → everything else (the benchmarked-best path on Apple Silicon)
+# GPU is opt-in, not automatic: the models are tiny and GPU VRAM is normally
+# reserved for LLM serving (vLLM). When a GPU is present we ASK interactively;
+# a non-interactive run falls back to CPU. Override with --gpu / --cpu.
+ARCH="$(uname -m 2>/dev/null || echo unknown)"
+HAS_NVIDIA=false
+if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
+    HAS_NVIDIA=true
+fi
+IS_APPLE_SILICON=false
+if [ "$PLATFORM" = "macos" ] && [ "$ARCH" = "arm64" ]; then
+    IS_APPLE_SILICON=true
+fi
+ACCEL_CHOICE=auto   # auto | gpu | cpu  (set by --gpu / --cpu)
+ACCEL=cpu           # resolved below by resolve_accel()
 
 # Backend install paths
 PARAKEET_DIR="${CONFIG_DIR}/parakeet-stt"
@@ -75,6 +102,8 @@ for arg in "$@"; do
         --skip-parakeet)   SKIP_PARAKEE=true ;;
         --skip-supertonic) SKIP_SUPERTONIC=true ;;
         --skip-voices)     SKIP_VOICES=true ;;
+        --gpu)             ACCEL_CHOICE=gpu ;;
+        --cpu)             ACCEL_CHOICE=cpu ;;
         --venv-only)       VENV_ONLY=true ;;
         --force|-f)        FORCE=true ;;
         --uninstall)       UNINSTALL=true ;;
@@ -83,7 +112,7 @@ for arg in "$@"; do
                            INTEGRATE_OPENCLAW=false; INTEGRATE_HERMES=false
                            INTEGRATE_CODEX=false ;;
         -h|--help)
-            sed -n '2,22p' "$0"
+            sed -n '2,28p' "$0"
             exit 0
             ;;
         *) warn "Unknown flag: $arg (use --help)" ;;
@@ -122,21 +151,55 @@ ask_yn() {
     esac
 }
 
+# Resolve the accelerator (ACCEL=cuda|cpu) for the voice stack. Honors explicit
+# --gpu / --cpu; otherwise auto-selects: a detected NVIDIA GPU prompts the user
+# interactively (default No, to leave VRAM for LLM serving), and a
+# non-interactive run falls back to CPU. CPU is the only option off NVIDIA.
+resolve_accel() {
+    case "$ACCEL_CHOICE" in
+        cpu)
+            ACCEL=cpu
+            [ "$HAS_NVIDIA" = true ] && info "NVIDIA GPU present but --cpu given → using CPU"
+            return 0 ;;
+        gpu)
+            if [ "$HAS_NVIDIA" = true ]; then
+                ACCEL=cuda
+            else
+                warn "--gpu requested but no NVIDIA GPU detected → using CPU"
+                ACCEL=cpu
+            fi
+            return 0 ;;
+    esac
+    # auto
+    if [ "$HAS_NVIDIA" = true ]; then
+        if [ -t 0 ] && [ -t 1 ]; then
+            if ask_yn "NVIDIA GPU detected — use it for the voice stack? (uses VRAM that vLLM/LLM serving may need)" n; then
+                ACCEL=cuda
+                return 0
+            fi
+            info "Keeping voice stack on CPU (re-run with --gpu to use the GPU)"
+        else
+            info "NVIDIA GPU detected but running non-interactively → defaulting to CPU (use --gpu to enable)"
+        fi
+    fi
+    ACCEL=cpu
+}
+
 if [ $# -eq 0 ] && [ -t 0 ] && [ -t 1 ] && [ "$UNINSTALL" = "false" ]; then
     echo ""
     printf '\033[1;36m  ╔══════════════════════════════════════════════════════╗\033[0m\n'
     printf '\033[1;36m  ║      OpenCode Voice Service — Setup                  ║\033[0m\n'
-    printf '\033[1;36m  ║   100%% CPU-only · No GPU Required · Local ONNX       ║\033[0m\n'
+    printf '\033[1;36m  ║      Local ONNX · Auto-selects CPU / NVIDIA GPU      ║\033[0m\n'
     printf '\033[1;36m  ╚══════════════════════════════════════════════════════╝\033[0m\n'
     echo ""
     echo "  Components:"
     echo "    [1] Silero VAD + Python venv  (always installed)"
-    if ask_yn "[2] Parakeet STT — local ONNX ASR on :5093 (CPU-only)" y; then
+    if ask_yn "[2] Parakeet STT — local ONNX ASR on :5093" y; then
         SKIP_PARAKEE=false
     else
         SKIP_PARAKEE=true
     fi
-    if ask_yn "[3] Supertonic TTS — local ONNX TTS on :8766 (CPU-only)" y; then
+    if ask_yn "[3] Supertonic TTS — local ONNX TTS on :8766" y; then
         SKIP_SUPERTONIC=false
     else
         SKIP_SUPERTONIC=true
@@ -200,6 +263,28 @@ if [ "$UNINSTALL" = true ]; then
     warn "  rm -rf $SKILL_DIR"
     warn "To remove everything: ./setup.sh --uninstall --force"
     exit 0
+fi
+
+# --- Resolve accelerator (CPU vs CUDA) before installing anything ------------
+resolve_accel
+if [ "$ACCEL" = "cuda" ]; then
+    GPU_NAME="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n1)"
+    ok "Accelerator: NVIDIA GPU (CUDA) — ${GPU_NAME:-detected}"
+else
+    if [ "$IS_APPLE_SILICON" = true ]; then
+        info "Accelerator: CPU (Apple Silicon ${ARCH} — ONNX-on-CPU is the benchmarked-best path here)"
+    else
+        info "Accelerator: CPU"
+    fi
+fi
+
+# Derived runtime knobs consumed by the service definitions below.
+if [ "$ACCEL" = "cuda" ]; then
+    USE_GPU_VAL=true
+    SUPERTONIC_ORT_BACKEND_VAL=cuda
+else
+    USE_GPU_VAL=false
+    SUPERTONIC_ORT_BACKEND_VAL=cpu
 fi
 
 # =============================================================================
@@ -282,16 +367,17 @@ install_parakeet() {
         ok "Parakeet venv created"
     fi
 
-    # Install: ONNX runtime CPU variant (macOS doesn't have onnxruntime-gpu)
-    info "Installing Parakeet dependencies..."
+    # ONNX runtime variant follows the resolved accelerator. Only CUDA hosts
+    # keep onnxruntime-gpu; macOS, CPU-only Linux, and declined-GPU hosts swap it
+    # for the plain CPU wheel (the -gpu wheel needs CUDA libs and fails without).
+    info "Installing Parakeet dependencies (${ACCEL})..."
     "$PARAKEET_VENV/bin/pip" install --quiet --upgrade pip 2>/dev/null
 
-    # macOS: use onnxruntime (no GPU variant available)
-    if [ "$(uname -s)" = "Darwin" ]; then
-        sed 's/onnxruntime-gpu==1.26.0/onnxruntime/' "$PARAKEET_DIR/requirements.txt" > "$PARAKEET_DIR/requirements-darwin.txt"
-        REQ_FILE="$PARAKEET_DIR/requirements-darwin.txt"
-    else
+    if [ "$ACCEL" = "cuda" ]; then
         REQ_FILE="$PARAKEET_DIR/requirements.txt"
+    else
+        sed 's/onnxruntime-gpu==1.26.0/onnxruntime/' "$PARAKEET_DIR/requirements.txt" > "$PARAKEET_DIR/requirements-cpu.txt"
+        REQ_FILE="$PARAKEET_DIR/requirements-cpu.txt"
     fi
 
     "$PARAKEET_VENV/bin/pip" install --quiet -r "$REQ_FILE" 2>&1 | grep -v "^$" || true
@@ -423,6 +509,13 @@ install_supertonic() {
         huggingface-hub \
         transformers \
         2>&1 | grep -v "^$" || true
+
+    # CUDA host: ensure the GPU ONNX Runtime wheel is present so the CUDA EP can
+    # load (the requirements.txt ships the CPU wheel by default).
+    if [ "$ACCEL" = "cuda" ]; then
+        info "Installing onnxruntime-gpu for Supertonic (CUDA)..."
+        "$SUPERTONIC_VENV/bin/pip" install --quiet onnxruntime-gpu 2>&1 | grep -v "^$" || true
+    fi
 
     ok "Supertonic dependencies installed"
 
@@ -676,7 +769,7 @@ if [ "$PLATFORM" = "linux" ]; then
     if [ "$SKIP_PARAKEE" = "false" ] && [ -d "$PARAKEET_DIR" ]; then
         cat > "$SYSTEMD_USER_DIR/opencode-parakeet-stt.service" <<SVCEOF
 [Unit]
-Description=Parakeet STT Server (ONNX, CPU-only) on :${PARAKEET_PORT}
+Description=Parakeet STT Server (ONNX, ${ACCEL}) on :${PARAKEET_PORT}
 After=network.target
 
 [Service]
@@ -687,7 +780,7 @@ Restart=always
 RestartSec=5
 Environment=HOME=${HOME}
 Environment=PARAKEET_PORT=${PARAKEET_PORT}
-Environment=PARAKEET_USE_GPU=false
+Environment=PARAKEET_USE_GPU=${USE_GPU_VAL}
 Environment=PARAKEET_DEFAULT_MODEL=parakeet-tdt-0.6b-v3
 StandardOutput=append:${CONFIG_DIR}/parakeet-stt.log
 StandardError=append:${CONFIG_DIR}/parakeet-stt.log
@@ -702,7 +795,7 @@ SVCEOF
     if [ "$SKIP_SUPERTONIC" = "false" ] && [ -d "$SUPERTONIC_DIR" ]; then
         cat > "$SYSTEMD_USER_DIR/opencode-supertonic.service" <<SVCEOF
 [Unit]
-Description=Supertonic TTS Server (ONNX, CPU-only) on :${SUPERTONIC_PORT}
+Description=Supertonic TTS Server (ONNX, ${ACCEL}) on :${SUPERTONIC_PORT}
 After=network.target
 
 [Service]
@@ -716,8 +809,8 @@ Environment=HOME=${HOME}
 Environment=SUPERTONIC_MODEL_DIR=${SUPERTONIC_DIR}/assets/supertonic-3
 Environment=ONNX_DIR=${SUPERTONIC_DIR}/assets/supertonic-3/onnx
 Environment=VOICE_STYLES_DIR=${SUPERTONIC_DIR}/assets/supertonic-3/voice_styles
-Environment=USE_GPU=false
-Environment=SUPERTONIC_ORT_BACKEND=cpu
+Environment=USE_GPU=${USE_GPU_VAL}
+Environment=SUPERTONIC_ORT_BACKEND=${SUPERTONIC_ORT_BACKEND_VAL}
 Environment=LOG_LEVEL=INFO
 StandardOutput=append:${CONFIG_DIR}/supertonic.log
 StandardError=append:${CONFIG_DIR}/supertonic.log
@@ -781,6 +874,11 @@ echo "  Voice skill:   $SKILL_DIR/talk.sh"
 echo "  VAD engine:    $SKILL_DIR/vad_recorder.py"
 echo "  TTS CLI:       $CONFIG_DIR/tts.sh"
 echo "  Voice venv:    $VENV_DIR"
+if [ "$ACCEL" = "cuda" ]; then
+    echo "  Accelerator:   NVIDIA GPU (CUDA)  —  re-run with --cpu to switch back"
+else
+    echo "  Accelerator:   CPU$( [ "$HAS_NVIDIA" = true ] && printf '  (GPU present; re-run with --gpu to use it)' )"
+fi
 echo ""
 if [ "$PLATFORM" = "linux" ]; then
     pk_state=$(systemctl --user is-active opencode-parakeet-stt.service 2>/dev/null || echo inactive)
