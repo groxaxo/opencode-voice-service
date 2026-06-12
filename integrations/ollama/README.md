@@ -82,3 +82,7 @@ All speech inference is CPU-only. The LLM runs wherever Ollama runs (CPU, GPU, o
 - Reasoning models (Qwen3.5, DeepSeek-R1, etc.) get `think: false` by default to
   prevent chain-of-thought from being spoken aloud. Set `OLLAMA_VOICE_NO_THINK=0` to
   hear the full reasoning.
+- As a safeguard, any inline `<think>…</think>` reasoning a model emits in its reply
+  is stripped before TTS — so even models that ignore the `think` flag never get
+  their chain-of-thought read aloud. A reply that is *only* reasoning (e.g. cut off
+  at `OLLAMA_VOICE_MAX_TOKENS`) is dropped and the loop simply listens again.
