@@ -17,7 +17,7 @@
 
 -----
 
-A complete, local voice pipeline for AI agents. One command installs everything: [Silero VAD](https://github.com/snakers4/silero-vad) for detecting when you speak, [Parakeet TDT 0.6B](https://github.com/groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai) for transcription, and [Supertonic TTS 3](https://github.com/groxaxo/supertonic-express-3) for synthesis. No cloud, no API keys, no GPU.
+A complete, local voice pipeline for AI agents. One command installs everything: [Silero VAD](https://github.com/snakers4/silero-vad) for detecting when you speak, [Parakeet TDT 0.6B](https://github.com/groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai) for transcription, and [Supertonic TTS 3](https://github.com/groxaxo/supertonic-express-3) for synthesis. No cloud, no API keys, no GPU required.
 
 It drops a `talk` skill into **Claude Code**, **OpenCode CLI**, **OpenClaw**, **Hermes Agent**, and **Codex**, then installs and starts the speech backends for you. Pick your agent, run the installer, start talking.
 
@@ -58,7 +58,7 @@ Supertonic defaults to **8 denoising steps** — short replies in ~1.4 s, faster
 
 The voice overhead around your LLM is **~1.5–2 s** (STT + TTS combined). In practice, the slowest part of the loop is the LLM itself.
 
-> Parakeet *can* use `onnxruntime-gpu` if you have spare VRAM — but the whole point is to leave the GPU for the model that’s answering you.
+> Parakeet *can* use `onnxruntime-gpu` if you have spare VRAM — but the whole point is to leave the GPU for the model that’s answering you. The installer **auto-detects** your hardware: on a Linux box with an NVIDIA GPU it asks whether to use CUDA (and defaults to CPU if you decline or run non-interactively); Apple Silicon and CPU-only hosts stay on the benchmarked-best ONNX-CPU path. Force it either way with `./setup.sh --gpu` or `./setup.sh --cpu`.
 
 ### Apple Silicon (Apple M5)
 
