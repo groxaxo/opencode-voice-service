@@ -20,3 +20,15 @@ to include the Silero VAD micro-benchmark; otherwise the HTTP STT/TTS numbers ar
 still measured and the VAD line is skipped.
 
 Latest results for the reference machine are in [`RESULTS.md`](RESULTS.md).
+
+## TTS backend comparison
+
+Compare the Supertonic backends head-to-head (CPU only, identical sentences and
+methodology). Needs both servers up — Supertonic 3 on `:8766` and the optional
+Supertonic 2 on `:8880` (`bash integrations/supertonic2/install.sh`).
+
+```bash
+python benchmarks/compare_tts_backends.py     # writes benchmarks/TTS_BACKENDS.md
+```
+
+Latest comparison: [`TTS_BACKENDS.md`](TTS_BACKENDS.md).

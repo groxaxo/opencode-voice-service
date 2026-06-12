@@ -34,6 +34,7 @@ The numbers below are **measured, not estimated** — and reproducible.
 |**Silero VAD**          |ONNX     |~0.1 ms/frame                         |~1.3 MB  |
 |**Parakeet TDT 0.6B v3**|ONNX INT8|~280 ms short reply · 8–21× realtime  |~600 MB  |
 |**Supertonic TTS 3**    |ONNX FP16|~1.7 s short reply · 1.6–2.8× realtime|~196 MB  |
+|**Supertonic TTS 2** _(optional)_|ONNX|~0.8 s short reply · 3.4–10.5× realtime|~252 MB  |
 
 ## Benchmarks
 
@@ -59,6 +60,18 @@ Supertonic defaults to **8 denoising steps** — short replies in ~1.4 s, faster
 The voice overhead around your LLM is **~1.5–2 s** (STT + TTS combined). In practice, the slowest part of the loop is the LLM itself.
 
 > Parakeet *can* use `onnxruntime-gpu` if you have spare VRAM — but the whole point is to leave the GPU for the model that’s answering you.
+
+### Supertonic 2 — optional, even faster on CPU
+
+[Supertonic 2](integrations/supertonic2/) is an optional backend (`bash integrations/supertonic2/install.sh`, then `TTS_ENGINE=supertonic2`). Measured **back-to-back on the same i7-12700KF, both CPU-only** (median of 5, voice F4), it synthesizes **~3.2× faster** than Supertonic 3 at the default 8 steps:
+
+|Reply            |Audio  |Supertonic 3 (8 steps)|Supertonic 2 (8 steps)|Speed-up|
+|-----------------|-------|----------------------|----------------------|--------|
+|short (10 words) |2.4 s  |1.98 s · 0.82 RTF     |**0.78 s · 0.29 RTF** |2.6×    |
+|medium (22 words)|6.6 s  |3.12 s · 0.48 RTF     |**0.99 s · 0.15 RTF** |3.2×    |
+|long (45 words)  |13.4 s |5.44 s · 0.41 RTF     |**1.44 s · 0.10 RTF** |3.8×    |
+
+At high quality (20 steps) the gap widens to **~3.4×** (mean RTF 0.31 vs 1.07). Both engines share the same OpenAI-compatible API and voices (F1–F5 / M1–M5), so switching is just `TTS_ENGINE`; Supertonic 2 runs on `:8880` and coexists with Supertonic 3 (`:8766`), falling back to it automatically. Full numbers and the reproduce script: [`benchmarks/TTS_BACKENDS.md`](benchmarks/TTS_BACKENDS.md) · `python benchmarks/compare_tts_backends.py`.
 
 ### Apple Silicon (Apple M5)
 
@@ -86,6 +99,7 @@ On the Neural Engine, Supertonic 3 TTS synthesizes **8–30× faster than CPU ON
                                           ▼
                      ┌──────────────────────────────────────┐
                      │ Supertonic TTS (:8766) — default     │  ONNX, CPU
+                     │ Supertonic 2  (:8880)  — optional    │  ONNX, CPU
                      │ NeuTTS (:8020)         — fallback 1   │  local GGUF
                      │ xAI (api.x.ai)         — fallback 2   │  cloud API
                      └──────────────────────────────────────┘
@@ -162,8 +176,11 @@ Same component/agent prompts, then registers Task Scheduler tasks that start Par
 |Voice venv (VAD + ONNX)|`~/.config/opencode/tts-venv/`      |—       |—                                 |
 |**Parakeet STT**       |`~/.config/opencode/parakeet-stt/`  |**5093**|launchd / systemd / Task Scheduler|
 |**Supertonic TTS**     |`~/.config/opencode/supertonic-tts/`|**8766**|launchd / systemd / Task Scheduler|
+|Supertonic 2 *(opt-in)*|`~/.config/opencode/supertonic2-tts/`|**8880**|`integrations/supertonic2/install.sh`|
 |**Web dashboard**      |`frontend/` (repo)                  |**7862**|manual (`bash frontend/start.sh`) |
 |`talk` skill           |per-agent (see below)               |—       |—                                 |
+
+> **Optional: Supertonic 2.** [Supertonic Express 2](https://github.com/groxaxo/supertonic-express) (model `onnx-community/Supertonic-TTS-2-ONNX`) is a 66M-param, CPU-only, multilingual ONNX TTS with the same OpenAI-compatible API. Add it with `bash integrations/supertonic2/install.sh`, then select it with `TTS_ENGINE=supertonic2` — it runs on `:8880` alongside Supertonic 3 and falls back to it automatically. See [`integrations/supertonic2/`](integrations/supertonic2/README.md).
 
 ## Agent integrations
 

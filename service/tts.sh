@@ -2,6 +2,8 @@
 # tts.sh — Multi-engine TTS CLI for OpenCode / talk skill.
 #
 # Engines: supertonic (default, local) → neutts (local) → xai (cloud, last resort).
+# supertonic2 (optional local on :8880, Supertonic Express 2) is selectable via
+# TTS_ENGINE=supertonic2 once installed (integrations/supertonic2/install.sh).
 # Set TTS_ENGINE to override. Local engines are always tried before the xAI
 # cloud; xAI is only used if every local engine fails. macOS say is intentionally
 # not available.
@@ -44,6 +46,13 @@ case "$(printf '%s' "${TTS_QUALITY}" | tr '[:upper:]' '[:lower:]')" in
 esac
 : "${SUPERTONIC_STEPS:=$_q_steps}"   # denoising steps (1–20)
 : "${SUPERTONIC_SPEED:=1.05}"
+# Supertonic 2 (optional) — Supertonic Express 2, onnx-community/Supertonic-TTS-2-ONNX.
+# Same OpenAI-compatible /v1/audio/speech API as Supertonic 3, served on :8880.
+# Not auto-installed; opt in with: bash integrations/supertonic2/install.sh
+: "${SUPERTONIC2_URL:=http://127.0.0.1:8880}"
+: "${SUPERTONIC2_VOICE:=M1}"          # Supertonic 2 voices: F1–F5 / M1–M5 (default M1)
+: "${SUPERTONIC2_STEPS:=$_q_steps}"   # denoising steps (1–20), shares TTS_QUALITY preset
+: "${SUPERTONIC2_SPEED:=1.05}"
 : "${NEUTTS_URL:=http://127.0.0.1:8020}"
 : "${NEUTTS_MODEL:=neuphonic/neutts-nano-q8-gguf}"
 : "${NEUTTS_MODEL_ES:=neuphonic/neutts-nano-spanish-q8-gguf}"
@@ -242,14 +251,15 @@ _speak_xai_chunked() {
     return 0
 }
 
-speak_supertonic() {
-    local text="$1"
-    local lang="$2"
+# Supertonic Express 2 and 3 share the same OpenAI-compatible /v1/audio/speech
+# endpoint: required field is `input`; voice is one of F1–F5 / M1–M5; lang via
+# `lang_code`. This helper drives either server.
+#   args: label url voice steps speed text lang
+_speak_supertonic_endpoint() {
+    local label="$1" url="$2" voice="$3" steps="$4" speed="$5" text="$6" lang="$7"
 
-    echo "[tts] Supertonic voice=${SUPERTONIC_VOICE} steps=${SUPERTONIC_STEPS} (${TTS_QUALITY}) lang=${lang} url=${SUPERTONIC_URL}" >&2
+    echo "[tts] ${label} voice=${voice} steps=${steps} (${TTS_QUALITY}) lang=${lang} url=${url}" >&2
 
-    # Supertonic Express 3 exposes an OpenAI-compatible /v1/audio/speech endpoint:
-    # required field is `input`; voice is one of F1–F5 / M1–M5; lang via `lang_code`.
     local payload
     payload=$(python3 -c "
 import json, sys
@@ -259,30 +269,41 @@ d = {'input': sys.argv[1], 'voice': sys.argv[3],
 if sys.argv[2]:
     d['lang_code'] = sys.argv[2]
 print(json.dumps(d))
-" "$text" "$lang" "$SUPERTONIC_VOICE" "$SUPERTONIC_STEPS" "$SUPERTONIC_SPEED" 2>/dev/null \
-        || printf '{"input":"%s","voice":"%s","response_format":"wav"}' "$text" "$SUPERTONIC_VOICE")
+" "$text" "$lang" "$voice" "$steps" "$speed" 2>/dev/null \
+        || printf '{"input":"%s","voice":"%s","response_format":"wav"}' "$text" "$voice")
 
     local http_code
     http_code=$(curl -sS -m 60 \
         -o "$OUTPUT" \
         -w '%{http_code}' \
-        "${SUPERTONIC_URL}/v1/audio/speech" \
+        "${url}/v1/audio/speech" \
         -H "Content-Type: application/json" \
         -d "$payload") || {
-        echo "tts.sh: Supertonic request failed (curl exit $?)" >&2
+        echo "tts.sh: ${label} request failed (curl exit $?)" >&2
         return 1
     }
 
     if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
-        echo "tts.sh: Supertonic HTTP $http_code" >&2
+        echo "tts.sh: ${label} HTTP $http_code" >&2
         rm -f "$OUTPUT"
         return 1
     fi
 
-    [ -f "$OUTPUT" ] && [ -s "$OUTPUT" ] || { echo "tts.sh: Supertonic produced no audio" >&2; return 1; }
+    [ -f "$OUTPUT" ] && [ -s "$OUTPUT" ] || { echo "tts.sh: ${label} produced no audio" >&2; return 1; }
     [ "$TTS_NO_PLAY" = "1" ] && { echo "$OUTPUT"; return 0; }
     play_wav "$OUTPUT"
     rm -f "$OUTPUT"
+}
+
+speak_supertonic() {
+    _speak_supertonic_endpoint "Supertonic" "$SUPERTONIC_URL" "$SUPERTONIC_VOICE" \
+        "$SUPERTONIC_STEPS" "$SUPERTONIC_SPEED" "$1" "$2"
+}
+
+# Supertonic 2 (Supertonic Express 2) — optional local engine on :8880.
+speak_supertonic2() {
+    _speak_supertonic_endpoint "Supertonic2" "$SUPERTONIC2_URL" "$SUPERTONIC2_VOICE" \
+        "$SUPERTONIC2_STEPS" "$SUPERTONIC2_SPEED" "$1" "$2"
 }
 
 # --- Fallback policy ---------------------------------------------------------
@@ -293,6 +314,17 @@ print(json.dumps(d))
 engine="$(printf '%s' "${TTS_ENGINE}" | tr '[:upper:]' '[:lower:]')"
 case "$engine" in
     supertonic|coreml-tts)
+        if speak_supertonic "$TEXT" "$LANG"; then exit 0; fi
+        echo "[tts] Supertonic failed → trying NeuTTS (local)…" >&2
+        if speak_neutts "$TEXT" "$LANG"; then exit 0; fi
+        echo "[tts] NeuTTS failed → xAI cloud (last resort)…" >&2
+        if speak_xai "$TEXT" "$LANG"; then exit 0; fi
+        echo "tts.sh: all TTS engines failed; no macOS say fallback is available" >&2
+        exit 1
+        ;;
+    supertonic2|supertonic-2)
+        if speak_supertonic2 "$TEXT" "$LANG"; then exit 0; fi
+        echo "[tts] Supertonic2 failed → trying Supertonic (local)…" >&2
         if speak_supertonic "$TEXT" "$LANG"; then exit 0; fi
         echo "[tts] Supertonic failed → trying NeuTTS (local)…" >&2
         if speak_neutts "$TEXT" "$LANG"; then exit 0; fi
@@ -321,7 +353,7 @@ case "$engine" in
         exit 1
         ;;
     *)
-        echo "tts.sh: unknown TTS_ENGINE=${TTS_ENGINE}. Use: supertonic, neutts, xai." >&2
+        echo "tts.sh: unknown TTS_ENGINE=${TTS_ENGINE}. Use: supertonic, supertonic2, neutts, xai." >&2
         exit 2
         ;;
 esac

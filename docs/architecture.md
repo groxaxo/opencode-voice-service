@@ -17,6 +17,7 @@ The architecture is modeled after OpenVoiceApp iOS, a production voice app whose
                                       ▼
                      ┌──────────────────────────────────┐
                      │ Supertonic TTS (:8766)  — default │
+                     │ Supertonic 2  (:8880)   — optional│
                      │ NeuTTS (:8020)         — fallback │
                      │ xAI (cloud)            — fallback │
                      └──────────────────────────────────┘
@@ -98,17 +99,30 @@ sounddevice.InputStream ──▶ Silero VAD (ONNX) ──▶ Endpointer ──�
 - Measured 1.6–2.8× realtime on an Intel i7-12700KF (CPU only); FP16, 8 denoising steps
 - Multilingual: EN, ES, KO, PT, FR; voices F1–F5 / M1–M5
 
+### Optional: Supertonic 2 (`:8880`)
+
+[Supertonic Express 2](https://github.com/groxaxo/supertonic-express)
+(model [`onnx-community/Supertonic-TTS-2-ONNX`](https://huggingface.co/onnx-community/Supertonic-TTS-2-ONNX),
+66M params) is a separate, opt-in backend exposing the **same** OpenAI-compatible
+`/v1/audio/speech` API. It is *not* auto-installed — add it with
+`bash integrations/supertonic2/install.sh`. It runs on `:8880` (so it coexists
+with Supertonic 3), is forced to the CPU ONNX Runtime backend, and is driven by
+`tts.sh` via `TTS_ENGINE=supertonic2` (graph:
+`text_encoder → latent_denoiser → voice_decoder`). Same language and voice
+coverage as Supertonic 3. See [`integrations/supertonic2/`](../integrations/supertonic2/README.md).
+
 ### TTS Fallback Chain
 
 **Policy:** local engines are always exhausted before the xAI cloud — xAI is the
 last resort, used only if every local engine fails. (Selecting `xai` explicitly
 honors that choice first, then still falls back to local engines.)
 
-| Primary | Fallback 1 | Fallback 2 (last resort) |
-|---------|-----------|--------------------------|
-| `supertonic` (default) → | `neutts` (local) → | `xai` (cloud) |
-| `neutts` → | `supertonic` (local) → | `xai` (cloud) |
-| `xai` (explicit) → | `supertonic` (local) → | `neutts` (local) |
+| Primary | Fallback 1 | Fallback 2 | Fallback 3 (last resort) |
+|---------|-----------|-----------|--------------------------|
+| `supertonic` (default) → | `neutts` (local) → | `xai` (cloud) | — |
+| `supertonic2` (opt-in) → | `supertonic` (local) → | `neutts` (local) → | `xai` (cloud) |
+| `neutts` → | `supertonic` (local) → | `xai` (cloud) | — |
+| `xai` (explicit) → | `supertonic` (local) → | `neutts` (local) | — |
 
 ## Full Turn Data Flow
 
