@@ -28,16 +28,23 @@ model you can `ollama run`, you can `ollama-voice`.
 ```bash
 # from this repo's root
 bash integrations/ollama/install.sh
+# …or, once the command is on your PATH, repair/reinstall anytime with:
+ollama-voice --setup
 ```
 
 The installer:
 
 1. Verifies the stock `ollama` binary is present (it does **not** rebuild it).
-2. Installs the CPU speech backends — Parakeet STT (`:5093`) and Supertonic TTS (`:8766`) —
-   by delegating to the repo's `setup.sh`. **Skipped automatically** if they're already
+2. Installs the CPU speech backends — Parakeet STT (`:5093`) and Supertonic TTS — by
+   delegating to the repo's `setup.sh`. **Skipped automatically** if they're already
    installed and healthy.
 3. Installs the `ollama-voice` command onto your `PATH` (`~/.local/bin` by default).
-4. Smoke-checks Ollama + both backends and prints how to start talking.
+4. Smoke-checks Ollama + the backends and prints how to start talking.
+
+It is **self-contained and non-destructive**: it installs to your user `PATH`, never edits
+your shell profile, and never touches other agents' skill installs. The `ollama-voice`
+command then **auto-detects the local TTS port at runtime** on whatever machine it runs —
+no per-host configuration needed (see [Portable, local-first TTS](#portable-local-first-tts)).
 
 Flags: `--yes` (no prompts) · `--bindir DIR` · `--model NAME` (ensure a model is pulled) ·
 `--skip-backends` · `--reinstall-backends` · `--uninstall [--backends]`.
@@ -51,10 +58,11 @@ themselves are installed for you in step 2.
 ```bash
 ollama-voice                 # talk to your default model (speak after the tone)
 ollama-voice llama3.2        # talk to a specific model (pulled if missing)
+ollama-voice --setup         # install/repair the voice backends + this command
 ollama-voice --text          # type instead of speaking (mic-free test; replies still spoken)
 ollama-voice --once          # one exchange, then exit
 ollama-voice --list          # list local Ollama models
-ollama-voice --status        # check Ollama + STT/TTS backends
+ollama-voice --status        # check Ollama + STT/TTS backends (shows the detected TTS)
 # Ctrl-C to leave the conversation. Say "goodbye"/"exit"/"adiós" to end by voice.
 ```
 
@@ -74,12 +82,14 @@ ollama() { [ "$1" = voice ] && { shift; command ollama-voice "$@"; } || command 
                   Ollama  POST /api/chat (:11434)   ← your installed ollama, streamed
                             │   (full conversation history; chain-of-thought is never spoken)
                             ▼
-            Supertonic TTS  (talk.sh speak, :8766) ─▶ playback ─▶ listen again
+            local TTS  (talk.sh speak, auto-detected port) ─▶ playback ─▶ listen again
 ```
 
 `ollama-voice` is a thin orchestrator: it shells out to the same `talk.sh` the rest of the
 project uses for STT/TTS, and calls Ollama's streaming chat API in between — the exact shape
-of the upstream `ollama voice` Go command (Option B), minus the rebuild.
+of the upstream `ollama voice` Go command (Option B), minus the rebuild. It keeps a bounded
+conversation history, streams the reply to your terminal, and never speaks the model's
+chain-of-thought.
 
 ### Configuration
 
@@ -94,21 +104,27 @@ of the upstream `ollama voice` Go command (Option B), minus the rebuild.
 | `OLLAMA_VOICE_SYSTEM` | _(concise spoken-style prompt)_ | system prompt; set empty to use the model's own |
 | `OLLAMA_VOICE_LANG` | _(auto)_ | TTS language hint: `en` / `es` / `""` |
 | `OLLAMA_VOICE_KEEPALIVE` | _(server default)_ | keep the model warm between turns, e.g. `10m` |
-| `OLLAMA_VOICE_NUM_PREDICT` | _(model default)_ | cap reply length in tokens |
+| `OLLAMA_VOICE_NUM_PREDICT` | `400` | cap reply length in tokens (`0` = unlimited) |
+| `OLLAMA_VOICE_HISTORY` | `20` | conversation messages kept for context (`0` = all) |
+| `OLLAMA_VOICE_NO_DETECT` | _(off)_ | set `1` to skip TTS port auto-detection (trust env/`talk.sh`) |
 | `TALK_SH` | _(installed copy)_ | path to `talk.sh` if not in the standard location |
-| `OLLAMA_VOICE_ENV` | `~/.config/opencode/ollama-voice.env` | `KEY=VALUE` defaults file (your shell env overrides it) |
+| `OLLAMA_VOICE_ENV` | `~/.config/opencode/ollama-voice.env` | `KEY=VALUE` defaults file / detection cache (your shell env overrides it) |
 
-**Local TTS, automatically:** voice replies are synthesized by `talk.sh`/`tts.sh`, whose
-engine chain is local **Supertonic** → local **NeuTTS** → **xAI** (cloud). To keep you on
-local synthesis, `install.sh` probes for a working Supertonic server and **pins the engine
-and URL** in `~/.config/opencode/ollama-voice.env`, which `ollama-voice` loads as defaults.
+<a name="portable-local-first-tts"></a>
+**Portable, local-first TTS:** voice replies are synthesized by `talk.sh`/`tts.sh`, whose
+engine chain is local **Supertonic** → local **NeuTTS** → **xAI** (cloud, last resort).
+`ollama-voice` keeps you on local synthesis on **any machine** by auto-detecting the TTS port
+**at runtime**: it POSTs a tiny probe to the candidate ports — the project default `:8766`
+first, then the common alternative `:8765` — and uses whichever actually returns audio,
+caching the winner to `~/.config/opencode/ollama-voice.env` for fast subsequent runs. This
+handles the common case where another service (e.g. a Cursor API) has taken `:8766` while
+Supertonic runs on `:8765`.
 
-This matters because the project default `SUPERTONIC_URL` is `:8766`, but that port is
-sometimes taken by an unrelated service — the installer probes `:8766` then `:8765` and
-writes whichever actually returns audio. To re-detect (e.g. after starting Supertonic), run
-`bash integrations/ollama/install.sh` again. If you have `XAI_API_KEY` set and no local TTS
-is found, replies fall back to the cloud voice; `unset XAI_API_KEY` to force local-only.
-Check engine health with `bash ~/.config/opencode/skills/talk/talk.sh status`.
+If no local Supertonic is found it prefers local **NeuTTS** (`:8020`); only if every local
+engine fails does it reach the **xAI cloud** (and only when `XAI_API_KEY` is set). Pin a
+specific server by exporting `SUPERTONIC_URL`; disable probing with `OLLAMA_VOICE_NO_DETECT=1`;
+force a re-detect by deleting the cache file. Check engine health with
+`bash ~/.config/opencode/skills/talk/talk.sh status`.
 
 ### Uninstall
 
