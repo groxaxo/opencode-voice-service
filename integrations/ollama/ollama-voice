@@ -1,0 +1,603 @@
+#!/usr/bin/env python3
+# ollama-voice — hands-free spoken conversation with a local Ollama model.
+#
+# Pipeline:
+#   mic --> Silero VAD --> Parakeet STT   (via `talk.sh listen`)
+#       --> Ollama /api/chat              (your already-installed ollama)
+#       --> Supertonic TTS                (via `talk.sh speak`) --> playback --> loop
+#
+# It reuses the opencode-voice-service speech stack (talk.sh) for STT/TTS and the
+# locally-installed Ollama HTTP API for the LLM. All speech inference is CPU-only;
+# no GPU and no rebuild of Ollama are required — it talks to the stock binary over
+# its stable HTTP API, exactly like `ollama run` does.
+#
+# Install with:  bash integrations/ollama/install.sh
+# Then:          ollama-voice [MODEL]
+#
+# Usage:
+#   ollama-voice                  talk to the default model (speak after the tone)
+#   ollama-voice MODEL            talk to a specific model (pulled if missing)
+#   ollama-voice --text           type instead of speaking (replies still spoken)
+#   ollama-voice --once           one exchange, then exit
+#   ollama-voice --no-speak       print replies but do not synthesize them
+#   ollama-voice --list           list local Ollama models and exit
+#   ollama-voice --status         check Ollama + STT/TTS backends and exit
+#   Ctrl-C                        leave the conversation
+#
+# Environment:
+#   OLLAMA_HOST            Ollama endpoint            (default http://127.0.0.1:11434)
+#   OLLAMA_VOICE_MODEL     default model when none is given on the command line
+#   OLLAMA_VOICE_THINK     false|true|high|medium|low|default  (default: false —
+#                          reasoning is never spoken aloud; "default" lets the model decide)
+#   OLLAMA_VOICE_SYSTEM    system prompt (default: a concise spoken-style prompt;
+#                          set to an empty string to use the model's own system prompt)
+#   OLLAMA_VOICE_LANG      en|es|""   TTS language hint (default: auto-detect)
+#   OLLAMA_VOICE_KEEPALIVE keep-alive for the model, e.g. 10m (default: server default)
+#   OLLAMA_VOICE_NUM_PREDICT  cap reply length in tokens (default: model default)
+#   TALK_SH                path to talk.sh (default: the installed copy)
+#   TALK_IDLE_TIMEOUT_S, VAD_THRESHOLD, MIC_QUERY, TTS_ENGINE, SUPERTONIC_VOICE, ...
+#                          forwarded to talk.sh unchanged.
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+
+OMIT = object()  # sentinel: "do not send this field"
+
+DEFAULT_HOST = "http://127.0.0.1:11434"
+
+DEFAULT_SYSTEM = (
+    "You are a helpful voice assistant. The user is speaking to you out loud, and "
+    "your reply will be read back by a text-to-speech engine. Answer in a natural, "
+    "conversational, spoken style and keep it short — usually one to three sentences. "
+    "Do not use markdown, bullet lists, headings, code blocks, tables, or emoji; write "
+    "plain spoken sentences. If you need to refer to code or a link, describe it briefly "
+    "instead of reading it out character by character."
+)
+
+EXIT_PHRASES = {
+    "goodbye", "good bye", "bye", "bye bye", "exit", "quit", "stop", "stop talking",
+    "end conversation", "that's all", "thats all", "thank you goodbye",
+    "adios", "adiós", "chau", "chao", "hasta luego", "nos vemos",
+}
+
+# ANSI styling (disabled when stdout is not a TTY or NO_COLOR is set).
+_USE_COLOR = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
+
+
+def _c(code, text):
+    if not _USE_COLOR:
+        return text
+    return "\033[%sm%s\033[0m" % (code, text)
+
+
+def info(msg):
+    sys.stderr.write(_c("1;34", "[voice] ") + msg + "\n")
+    sys.stderr.flush()
+
+
+def warn(msg):
+    sys.stderr.write(_c("1;33", "[voice] ") + msg + "\n")
+    sys.stderr.flush()
+
+
+def fail(msg, code=1):
+    sys.stderr.write(_c("1;31", "[voice] ") + msg + "\n")
+    sys.stderr.flush()
+    sys.exit(code)
+
+
+# --------------------------------------------------------------------------- #
+# Locating the speech stack (talk.sh)                                          #
+# --------------------------------------------------------------------------- #
+
+def find_talk_sh():
+    """Resolve talk.sh: $TALK_SH, then the installed copy, then a repo checkout."""
+    candidates = []
+    env = os.environ.get("TALK_SH")
+    if env:
+        candidates.append(env)
+    candidates.append(os.path.expanduser("~/.config/opencode/skills/talk/talk.sh"))
+    # Repo fallback: integrations/ollama/ollama-voice -> ../../service/talk.sh
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates.append(os.path.normpath(os.path.join(here, "..", "..", "service", "talk.sh")))
+    for path in candidates:
+        if path and os.path.isfile(path):
+            return path
+    fail(
+        "Voice scripts (talk.sh) not found.\n"
+        "        Install the voice backends first:\n"
+        "            bash integrations/ollama/install.sh\n"
+        "        or point this tool at an existing talk.sh with TALK_SH=/path/to/talk.sh"
+    )
+
+
+def listen(talk_sh):
+    """Record one utterance and return the transcript ("" on silence/timeout)."""
+    sys.stderr.write(_c("1;36", "\n● listening — speak now…\n"))
+    sys.stderr.flush()
+    try:
+        proc = subprocess.run(
+            ["bash", talk_sh, "listen"],
+            stdout=subprocess.PIPE,
+            stderr=None,  # let VAD cues/diagnostics reach the terminal
+            text=True,
+        )
+    except FileNotFoundError:
+        fail("`bash` not found on PATH — cannot run the speech scripts.")
+    if proc.returncode != 0:
+        warn("listen failed (talk.sh exit %d) — is the STT backend on :5093 up?" % proc.returncode)
+        return ""
+    return (proc.stdout or "").strip()
+
+
+def speak(talk_sh, text, lang):
+    """Synthesize and play text. Auto-listen is disabled; we own the turn loop."""
+    text = text.strip()
+    if not text:
+        return
+    args = ["bash", talk_sh, "speak", text]
+    if lang:
+        args.append(lang)
+    env = dict(os.environ)
+    env["TALK_AUTO_LISTEN"] = "0"  # this tool drives listen() itself
+    try:
+        proc = subprocess.run(args, env=env)
+    except FileNotFoundError:
+        fail("`bash` not found on PATH — cannot run the speech scripts.")
+    if proc.returncode != 0:
+        warn("speak failed (talk.sh exit %d) — is the TTS backend on :8766 up?" % proc.returncode)
+
+
+# --------------------------------------------------------------------------- #
+# Ollama HTTP API                                                              #
+# --------------------------------------------------------------------------- #
+
+class OllamaError(Exception):
+    pass
+
+
+def _normalize_host(host):
+    host = (host or DEFAULT_HOST).strip().rstrip("/")
+    if not re.match(r"^https?://", host):
+        host = "http://" + host
+    return host
+
+
+def _request(host, path, payload=None, timeout=10):
+    url = host + path
+    data = None
+    headers = {}
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=headers,
+                                 method="POST" if data else "GET")
+    try:
+        return urllib.request.urlopen(req, timeout=timeout)
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", "replace")
+        except Exception:
+            pass
+        msg = body
+        try:
+            msg = json.loads(body).get("error", body)
+        except Exception:
+            pass
+        raise OllamaError("HTTP %d: %s" % (e.code, msg.strip() or e.reason))
+    except urllib.error.URLError as e:
+        raise OllamaError("cannot reach Ollama at %s (%s)" % (host, e.reason))
+
+
+def server_up(host):
+    try:
+        _request(host, "/api/version", timeout=3).read()
+        return True
+    except OllamaError:
+        return False
+
+
+def server_version(host):
+    try:
+        data = json.loads(_request(host, "/api/version", timeout=3).read().decode("utf-8"))
+        return data.get("version", "?")
+    except Exception:
+        return None
+
+
+def list_models(host):
+    try:
+        data = json.loads(_request(host, "/api/tags", timeout=5).read().decode("utf-8"))
+    except OllamaError:
+        return []
+    return [m.get("name", "") for m in data.get("models", []) if m.get("name")]
+
+
+def model_present(host, model):
+    names = list_models(host)
+    base = model.split(":")[0]
+    for n in names:
+        if n == model or n == model + ":latest" or n.split(":")[0] == base:
+            return True
+    return False
+
+
+def try_start_server(host):
+    """Best-effort: start `ollama serve` if it isn't already running (like `ollama run`)."""
+    if server_up(host):
+        return True
+    exe = shutil.which("ollama")
+    if not exe:
+        return False
+    info("Ollama is not running — starting `ollama serve`…")
+    try:
+        logf = open(os.path.expanduser("~/.ollama/voice-serve.log"), "ab")
+    except Exception:
+        logf = subprocess.DEVNULL
+    try:
+        subprocess.Popen([exe, "serve"], stdout=logf, stderr=logf,
+                         stdin=subprocess.DEVNULL, start_new_session=True)
+    except Exception as e:
+        warn("could not start ollama serve: %s" % e)
+        return False
+    for _ in range(24):  # up to ~12s
+        if server_up(host):
+            return True
+        time.sleep(0.5)
+    return server_up(host)
+
+
+def ensure_model(host, model):
+    if model_present(host, model):
+        return
+    exe = shutil.which("ollama")
+    if not exe:
+        raise OllamaError("model '%s' is not installed and the `ollama` CLI is not on PATH to pull it" % model)
+    info("Model '%s' is not installed locally — pulling it now…" % model)
+    rc = subprocess.call([exe, "pull", model])
+    if rc != 0:
+        raise OllamaError("`ollama pull %s` failed (exit %d)" % (model, rc))
+
+
+# --------------------------------------------------------------------------- #
+# Cleaning model output for speech                                             #
+# --------------------------------------------------------------------------- #
+
+def clean_for_speech(text):
+    """Strip reasoning/markup so the TTS reads natural prose, not symbols."""
+    if not text:
+        return ""
+    # Never speak chain-of-thought, even if a model inlines it.
+    text = re.sub(r"<think>.*?</think>", " ", text, flags=re.S | re.I)
+    text = re.sub(r"<thinking>.*?</thinking>", " ", text, flags=re.S | re.I)
+    # Code blocks are shown on screen; speaking them is useless.
+    text = re.sub(r"```.*?```", " . Code is shown on screen. ", text, flags=re.S)
+    text = re.sub(r"~~~.*?~~~", " . Code is shown on screen. ", text, flags=re.S)
+    text = re.sub(r"`([^`]*)`", r"\1", text)                 # inline code -> bare text
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", text)        # images
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)     # links -> link text
+    lines = []
+    for ln in text.splitlines():
+        ln = re.sub(r"^\s{0,3}#{1,6}\s*", "", ln)            # headings
+        ln = re.sub(r"^\s*>\s?", "", ln)                     # blockquotes
+        ln = re.sub(r"^\s*[-*+]\s+", "", ln)                 # bullets
+        ln = re.sub(r"^\s*\d+[.)]\s+", "", ln)               # numbered lists
+        lines.append(ln)
+    text = "\n".join(lines)
+    text = text.replace("**", "").replace("__", "")          # bold
+    text = re.sub(r"(?<!\w)[*_](?=\w)", "", text)            # opening emphasis
+    text = re.sub(r"(?<=\w)[*_](?!\w)", "", text)            # closing emphasis
+    text = re.sub(r"\s*\n\s*", ". ", text)                   # line breaks -> sentence breaks
+    text = re.sub(r"\s{2,}", " ", text)
+    text = re.sub(r"(?:\.\s*){2,}", ". ", text)              # collapse runs of periods
+    return text.strip()
+
+
+def is_exit_phrase(text):
+    norm = re.sub(r"^\W+|\W+$", "", text.lower()).strip()
+    return norm in EXIT_PHRASES
+
+
+# --------------------------------------------------------------------------- #
+# Conversation                                                                 #
+# --------------------------------------------------------------------------- #
+
+class Conversation:
+    def __init__(self, host, model, system, think, keep_alive, num_predict):
+        self.host = host
+        self.model = model
+        self.messages = []
+        if system:
+            self.messages.append({"role": "system", "content": system})
+        self.think = think                  # value to send, or OMIT
+        self.think_unsupported = False      # set once a model rejects the field
+        self.keep_alive = keep_alive
+        self.options = {}
+        if num_predict is not None:
+            self.options["num_predict"] = num_predict
+
+    def _build_payload(self):
+        payload = {"model": self.model, "messages": self.messages, "stream": True}
+        if self.think is not OMIT and not self.think_unsupported:
+            payload["think"] = self.think
+        if self.options:
+            payload["options"] = self.options
+        if self.keep_alive:
+            payload["keep_alive"] = self.keep_alive
+        return payload
+
+    def _stream_once(self):
+        """POST /api/chat, echo tokens live, return the full reply content."""
+        resp = _request(self.host, "/api/chat", self._build_payload(), timeout=300)
+        content_parts = []
+        printed_thinking = False
+        for raw in resp:
+            line = raw.decode("utf-8", "replace").strip()
+            if not line:
+                continue
+            obj = json.loads(line)
+            if obj.get("error"):
+                raise OllamaError(obj["error"])
+            msg = obj.get("message") or {}
+            thinking = msg.get("thinking")
+            if thinking:
+                if not printed_thinking:
+                    sys.stderr.write(_c("2", "  (thinking…) "))
+                    printed_thinking = True
+                sys.stderr.write(_c("2", thinking))
+                sys.stderr.flush()
+            chunk = msg.get("content")
+            if chunk:
+                if printed_thinking:
+                    sys.stderr.write("\n")
+                    printed_thinking = False
+                sys.stdout.write(chunk)
+                sys.stdout.flush()
+                content_parts.append(chunk)
+            if obj.get("done"):
+                break
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+        return "".join(content_parts)
+
+    def respond(self, user_text):
+        """Append the user turn, generate the reply, append + return it."""
+        self.messages.append({"role": "user", "content": user_text})
+        sys.stdout.write(_c("1;32", "%s: " % self.model))
+        sys.stdout.flush()
+        try:
+            content = self._stream_once()
+        except OllamaError as e:
+            # Some models reject the `think` field outright — retry once without it.
+            if (self.think is not OMIT and not self.think_unsupported
+                    and "think" in str(e).lower()):
+                self.think_unsupported = True
+                content = self._stream_once()
+            else:
+                self.messages.pop()  # roll back the user turn so history stays clean
+                raise
+        self.messages.append({"role": "assistant", "content": content})
+        return content
+
+
+# --------------------------------------------------------------------------- #
+# Think / model resolution helpers                                             #
+# --------------------------------------------------------------------------- #
+
+def resolve_think(raw):
+    if raw is None:
+        raw = os.environ.get("OLLAMA_VOICE_THINK", "false")
+    raw = (raw or "").strip().lower()
+    if raw in ("", "default", "auto", "model"):
+        return OMIT
+    if raw in ("false", "off", "no", "0", "none"):
+        return False
+    if raw in ("true", "on", "yes", "1"):
+        return True
+    if raw in ("high", "medium", "low", "max"):
+        return raw
+    return False
+
+
+def resolve_model(host, arg):
+    if arg:
+        return arg
+    env = os.environ.get("OLLAMA_VOICE_MODEL")
+    if env:
+        return env
+    models = list_models(host)
+    if models:
+        return models[0]
+    fail("No Ollama models are installed.\n"
+         "        Pull one first, e.g.:  ollama pull llama3.2\n"
+         "        then run:              ollama-voice")
+
+
+def resolve_lang(arg):
+    if arg is not None:
+        return arg
+    return os.environ.get("OLLAMA_VOICE_LANG", "")  # "" => talk.sh auto-detects
+
+
+def resolve_system(arg):
+    if arg is not None:
+        return arg
+    env = os.environ.get("OLLAMA_VOICE_SYSTEM")
+    if env is not None:
+        return env
+    return DEFAULT_SYSTEM
+
+
+# --------------------------------------------------------------------------- #
+# Sub-commands                                                                 #
+# --------------------------------------------------------------------------- #
+
+def cmd_list(host):
+    if not server_up(host) and not try_start_server(host):
+        fail("Ollama is not reachable at %s" % host)
+    models = list_models(host)
+    if not models:
+        info("No models installed. Pull one with:  ollama pull llama3.2")
+        return
+    print("Local Ollama models:")
+    for m in models:
+        print("  " + m)
+
+
+def reachable(url):
+    try:
+        urllib.request.urlopen(url, timeout=3).read()
+        return True
+    except urllib.error.HTTPError:
+        return True  # any HTTP response means the server is alive
+    except Exception:
+        return False
+
+
+def cmd_status(host, talk_sh):
+    ver = server_version(host)
+    print(_c("1", "Ollama"))
+    print("  host:      %s" % host)
+    print("  server:    %s" % (("running (v%s)" % ver) if ver else "NOT running"))
+    if ver:
+        models = list_models(host)
+        print("  models:    %s" % (", ".join(models) if models else "(none — ollama pull <model>)"))
+    stt = os.environ.get("STT_URL", "http://127.0.0.1:5093/v1/audio/transcriptions")
+    stt_root = re.sub(r"(https?://[^/]+).*", r"\1", stt)
+    tts = os.environ.get("SUPERTONIC_URL", "http://127.0.0.1:8766")
+    print(_c("1", "Voice backends"))
+    print("  talk.sh:   %s" % talk_sh)
+    print("  STT :5093: %s" % ("reachable" if reachable(stt_root) else "NOT reachable"))
+    print("  TTS :8766: %s" % ("reachable" if reachable(tts.rstrip('/')) else "NOT reachable"))
+    print("\nDeeper backend check:  bash %s status" % talk_sh)
+
+
+# --------------------------------------------------------------------------- #
+# Main                                                                         #
+# --------------------------------------------------------------------------- #
+
+def build_parser():
+    p = argparse.ArgumentParser(
+        prog="ollama-voice",
+        description="Hands-free spoken conversation with a local Ollama model.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("model", nargs="?", help="model to talk to (default: $OLLAMA_VOICE_MODEL or first installed)")
+    p.add_argument("-l", "--list", action="store_true", help="list local Ollama models and exit")
+    p.add_argument("--status", action="store_true", help="check Ollama + STT/TTS backends and exit")
+    p.add_argument("--text", action="store_true", help="type input instead of speaking (replies still spoken)")
+    p.add_argument("--once", action="store_true", help="one exchange, then exit")
+    p.add_argument("--no-speak", action="store_true", help="print replies but do not synthesize them")
+    p.add_argument("--lang", default=None, help="TTS language hint: en | es | '' (auto)")
+    p.add_argument("--think", default=None, help="false|true|high|medium|low|default (default: false)")
+    p.add_argument("--system", default=None, help="system prompt ('' = use the model's own)")
+    p.add_argument("--host", default=None, help="Ollama host (default: $OLLAMA_HOST or %s)" % DEFAULT_HOST)
+    return p
+
+
+def main():
+    args = build_parser().parse_args()
+    host = _normalize_host(args.host or os.environ.get("OLLAMA_HOST", DEFAULT_HOST))
+
+    if args.list:
+        cmd_list(host)
+        return
+
+    talk_sh = find_talk_sh()
+
+    if args.status:
+        cmd_status(host, talk_sh)
+        return
+
+    if not server_up(host):
+        if not try_start_server(host):
+            fail("Ollama is not running and could not be started.\n"
+                 "        Start it in another terminal with:  ollama serve\n"
+                 "        (or check OLLAMA_HOST — currently %s)" % host)
+
+    model = resolve_model(host, args.model)
+    try:
+        ensure_model(host, model)
+    except OllamaError as e:
+        fail(str(e))
+
+    lang = resolve_lang(args.lang)
+    system = resolve_system(args.system)
+    think = resolve_think(args.think)
+    keep_alive = os.environ.get("OLLAMA_VOICE_KEEPALIVE") or None
+    num_predict = os.environ.get("OLLAMA_VOICE_NUM_PREDICT")
+    num_predict = int(num_predict) if (num_predict or "").strip().isdigit() else None
+
+    convo = Conversation(host, model, system, think, keep_alive, num_predict)
+
+    info("Voice chat with %s — speak after the tone, Ctrl-C to exit." % _c("1", model))
+    if args.text:
+        info("Text input mode: type your message and press Enter.")
+
+    silence_streak = 0
+    max_silence = 3  # consecutive silent listens before giving up (mic mode only)
+
+    try:
+        while True:
+            if args.text:
+                try:
+                    user_text = input(_c("1;36", "\nyou> ")).strip()
+                except EOFError:
+                    print()
+                    break
+            else:
+                user_text = listen(talk_sh)
+
+            if not user_text:
+                if args.text:
+                    continue
+                silence_streak += 1
+                if silence_streak >= max_silence:
+                    info("No speech detected for a while — exiting. (run `ollama-voice` to resume)")
+                    break
+                continue
+            silence_streak = 0
+
+            if not args.text:
+                sys.stdout.write(_c("1;36", "you: ") + user_text + "\n")
+                sys.stdout.flush()
+
+            if is_exit_phrase(user_text):
+                bye = "Goodbye!"
+                sys.stdout.write(_c("1;32", "%s: " % model) + bye + "\n")
+                if not args.no_speak:
+                    speak(talk_sh, bye, lang)
+                break
+
+            try:
+                reply = convo.respond(user_text)
+            except OllamaError as e:
+                warn("chat error: %s" % e)
+                continue
+
+            if not args.no_speak:
+                spoken = clean_for_speech(reply)
+                if spoken:
+                    speak(talk_sh, spoken, lang)
+
+            if args.once:
+                break
+    except KeyboardInterrupt:
+        sys.stderr.write("\n")
+        info("Goodbye.")
+        return
+
+
+if __name__ == "__main__":
+    main()

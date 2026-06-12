@@ -188,6 +188,18 @@ The installer copies the `talk` skill into each selected agent’s skill directo
 ./setup.sh --uninstall --force  # also remove installed dirs
 ```
 
+## Talk to a local LLM (Ollama)
+
+Point the voice loop at a model running in your local **[Ollama](https://github.com/ollama/ollama)** — speak to it, hear it reply, entirely offline. If Ollama is already installed, one command wires it up (**no Ollama rebuild**):
+
+```bash
+bash integrations/ollama/install.sh     # installs the `ollama-voice` command + voice backends
+ollama-voice                            # talk to your default model — speak after the tone, Ctrl-C to exit
+ollama-voice llama3.2 --text            # choose a model; type instead of speaking (mic-free test)
+```
+
+`ollama-voice` drives the **listen → chat → speak** loop against Ollama's HTTP API (the same one `ollama run` uses), reusing this project's CPU STT/TTS — so any model you can `ollama run`, you can talk to. See [`integrations/ollama/`](integrations/ollama/) for configuration and a native `ollama voice` subcommand (build-from-source) alternative.
+
 ## Web Dashboard
 
 A single-page control panel for testing and tuning all three components live. No npm, no framework — open it in a browser.
@@ -312,6 +324,7 @@ opencode-voice-service/
 ├── skill/SKILL.md           # agent skill descriptor
 ├── launchd/                 # macOS auto-start plists
 ├── frontend/                # web dashboard
+├── integrations/ollama/     # talk to a local Ollama model by voice (autoinstaller + command)
 └── benchmarks/              # reproducible benchmark suite
 ```
 
