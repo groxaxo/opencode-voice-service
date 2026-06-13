@@ -64,14 +64,30 @@ When the user enters talk/voice mode:
 3. **Speak + listen** — `talk.sh speak '<reply>'` (escape single quotes). This plays TTS, then **opens the mic immediately** when audio ends. **Stdout = the user's next utterance** (same as `listen`).
 4. **Loop** — Go to step 2 with the text from step 3. **Do not call `listen` separately** after `speak` (it is built in).
 
+The session **persists** across natural pauses and stays open until the user explicitly cancels via one of three signals:
+
+| Signal | Trigger | Empty stdout → agent exits loop |
+|--------|---------|--------------------------------|
+| Keyboard | `Ctrl+C` / `Cmd+D` (sent to `talk.sh`) | n/a — process killed |
+| Session silence | No speech for `TALK_IDLE_TIMEOUT_S` (default 300s = 5 min) | yes |
+| Spoken stop phrase | User says any phrase in `TALK_STOP_PHRASES` (default `"stop talk"`) | yes |
+
+When you receive empty stdout from `talk.sh speak`, **exit the conversation loop** cleanly — the user has ended the session. Do not call `talk.sh listen` again to "recover"; respect the cancel.
+
 ### Idle timeout
 
-`listen` exits cleanly with empty stdout after `TALK_IDLE_TIMEOUT_S` seconds (default: 30) if no speech is detected.
+`listen` exits cleanly with empty stdout after `TALK_IDLE_TIMEOUT_S` seconds (default: **300** = 5 min) if no speech is detected. This is the **session-silence window**: if the user walks away, the loop ends after 5 min of silence. Set `TALK_IDLE_TIMEOUT_S=0` to disable, or override per-session with e.g. `TALK_IDLE_TIMEOUT_S=1800 talk.sh speak …` for 30 min.
+
+### Stop phrases
+
+`TALK_STOP_PHRASES` is a pipe-separated list of phrases that end the session (case-insensitive substring match). Default: `"stop talk"`. Spanish: `TALK_STOP_PHRASES="stop talk|para de hablar"`. When matched, `cmd_listen` prints `"[talk] Stop phrase detected"` to stderr and empty stdout to the agent.
+
+> **Caveat:** substring match is intentionally permissive — *"I want to stop talking now"* matches `"stop talk"`. For tighter control, use a longer phrase: `TALK_STOP_PHRASES="end the conversation"`. Word-boundary matching is a planned future improvement.
 
 ### Rules
 
 - Always invoke `talk.sh` via Shell; never fake transcription or audio.
-- Empty stdout from `speak` (no speech detected) → `talk.sh listen` once, then continue.
+- **Empty stdout from `speak`** = user ended the session (stop phrase, silence timeout, or keyboard). Exit the conversation loop; do not retry `listen`.
 - One-off read-aloud only (no mic): `TALK_AUTO_LISTEN=0 talk.sh speak '…'`.
 - TTS down (all engines failed) → fix backends; do not use macOS `say`.
 - First session turn: `talk.sh status` if services were recently restarted.
@@ -96,7 +112,8 @@ When the user enters talk/voice mode:
 | `MIC_QUERY` | MacBook Air Microphone | Substring to select the mic |
 | `TALK_AUTO_LISTEN` | `1` | After `speak`, run `listen` |
 | `TALK_BARGE_IN` | `0` | Interrupt TTS on speech (opt-in) |
-| `TALK_IDLE_TIMEOUT_S` | `30` | Exit listen if no speech (0=disabled) |
+| `TALK_IDLE_TIMEOUT_S` | `300` | Session-silence window: exit listen if no speech within N seconds (0=disabled, 300=5 min) |
+| `TALK_STOP_PHRASES` | `stop talk` | Pipe-separated phrases that end the session (case-insensitive substring match) |
 
 ## Troubleshooting
 
@@ -109,6 +126,8 @@ When the user enters talk/voice mode:
 | No audio on Linux | Install ffmpeg: `sudo apt install ffmpeg` or `sudo dnf install ffmpeg` |
 | No audio on Windows | Install ffmpeg: `winget install Gyan.FFmpeg` |
 | xAI TTS fails | Check `XAI_API_KEY` is set; `talk.sh status` shows key status |
-| Listen blocks forever | Set `TALK_IDLE_TIMEOUT_S` (default 30s) |
+| Listen blocks forever | Set `TALK_IDLE_TIMEOUT_S` (default 300s = 5 min); check that mic is working with `talk.sh devices` |
+| Want to end the conversation | Speak any phrase in `TALK_STOP_PHRASES` (default `"stop talk"`), wait 5 min in silence, or send `Ctrl+C` to `talk.sh` |
+| Agent keeps re-calling `listen` after cancel | Empty stdout from `talk.sh speak` means session ended — break out of the loop, do not retry `listen` |
 | All TTS failed | Fix backends; system TTS fallback intentionally not used |
 | Backends not running | Rerun `./setup.sh` (macOS/Linux) or `.\setup.ps1` (Windows) |
