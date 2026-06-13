@@ -2,7 +2,7 @@
   <img src="img/banner.png" alt="Local VoiceMode LLM — talk to your AI, on CPU" width="100%">
 </p>
 
-<h1 align="center">OpenCode Voice Service</h1>
+<h1 align="center">Local VoiceMode LLM</h1>
 
 <p align="center">
   <strong>Give your AI agent a voice — and ears — that run entirely on your CPU.</strong>
