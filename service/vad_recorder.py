@@ -4,7 +4,7 @@
 Models OpenVoiceApp endpointing:
 - 512-sample frames @ 16kHz (~32ms per frame)
 - Silero VAD for speech detection
-- Configurable trailing silence threshold (default 500ms)
+- Configurable trailing silence threshold (default 700ms)
 - Pre-speech audio padding for natural starts
 - Ring buffer avoids unbounded memory growth
 - Idle timeout exits cleanly if no speech detected
@@ -136,8 +136,11 @@ def find_mic(query=None):
     Never selects virtual/remote audio adapters (NoMachine, VirtualBox, VMware).
 
     Priority:
+      0. macOS system default input (sd.default.device[0]) — honored first so
+         that the mic selected in System Settings → Sound → Input always wins.
       1. Substring match on --mic-query (if provided), skipping blocked devices.
-      2. Platform default: MacBook Air Microphone (macOS), or first non-blocked device.
+      2. macOS legacy: built-in MacBook microphone (kept as a fallback for when
+         the system default points at a blocked/empty device).
       3. First non-blocked input device.
       4. Absolute fallback: first input device of any kind.
     """
@@ -150,6 +153,26 @@ def find_mic(query=None):
         n = name.lower()
         return any(b in n for b in _BLOCKED)
 
+    def _dev_ok(i):
+        if i is None:
+            return False
+        try:
+            d = devices[i]
+        except (IndexError, TypeError):
+            return False
+        if d["max_input_channels"] <= 0:
+            return False
+        return not _is_blocked(d["name"])
+
+    # 0. System default input (the mic the user picked in Sound settings)
+    if not query:  # only honor the OS default when no explicit --mic-query
+        try:
+            default_in = sd.default.device[0]
+        except (AttributeError, IndexError, TypeError):
+            default_in = None
+        if _dev_ok(default_in):
+            return default_in
+
     # 1. Query match, skip blocked devices
     if query:
         q = query.lower()
@@ -160,7 +183,7 @@ def find_mic(query=None):
             if q in name.lower() and not _is_blocked(name):
                 return i
 
-    # 2. macOS: prefer built-in MacBook microphone
+    # 2. macOS: prefer built-in MacBook microphone (legacy fallback)
     if _platform.system() == "Darwin":
         for i, dev in enumerate(devices):
             if dev["max_input_channels"] > 0:
@@ -377,12 +400,12 @@ def main():
                    help="Directory for WAV files")
     p.add_argument("--output-file", default="opencode-turn.wav",
                    help="WAV filename (PID+timestamp appended for uniqueness)")
-    p.add_argument("--min-silence-ms", type=int, default=500,
-                   help="Silence after speech to end turn (default: 500ms)")
+    p.add_argument("--min-silence-ms", type=int, default=700,
+                   help="Silence after speech to end turn (default: 700ms)")
     p.add_argument("--vad-threshold", type=float, default=0.5,
                    help="VAD speech probability threshold (default: 0.5)")
     p.add_argument("--pre-speech-ms", type=int, default=800,
-                   help="Audio before detected speech to include (default: 400ms)")
+                   help="Audio before detected speech to include (default: 800ms)")
     p.add_argument("--ready-delay-ms", type=int, default=0,
                    help="Ignore mic/VAD for N ms after start (post ready-cue)")
     p.add_argument("--max-duration-s", type=float, default=30,

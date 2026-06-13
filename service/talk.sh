@@ -73,7 +73,9 @@ fi
 : "${STT_REMOTE_URL:=http://127.0.0.1:5093/v1/audio/transcriptions}"
 : "${STT_REMOTE_MODEL:=${STT_MODEL}}"
 # VAD parameters (passed to vad_recorder.py)
-: "${VAD_MIN_SILENCE_MS:=500}"
+# 700ms trailing silence tolerates natural mid-sentence pauses without cutting
+# the turn early; lower to ~500 for snappier (but more interrupt-prone) endpointing.
+: "${VAD_MIN_SILENCE_MS:=700}"
 : "${VAD_THRESHOLD:=0.5}"
 # Mic device selection
 # Default targets the built-in mic and the find_mic() logic explicitly

@@ -108,7 +108,7 @@ When you receive empty stdout from `talk.sh speak`, **exit the conversation loop
 | `TALK_READY_SOUND` | Tink.aiff | macOS system sound for ready cue |
 | `TALK_READY_DELAY_MS` | 700 | Ignore mic after cue |
 | `VAD_THRESHOLD` | 0.5 | Lower = more sensitive |
-| `VAD_MIN_SILENCE_MS` | 500 | End-of-turn silence |
+| `VAD_MIN_SILENCE_MS` | 700 | End-of-turn silence (700ms tolerates mid-sentence pauses; lower for snappier turns) |
 | `MIC_QUERY` | MacBook Air Microphone | Substring to select the mic |
 | `TALK_AUTO_LISTEN` | `1` | After `speak`, run `listen` |
 | `TALK_BARGE_IN` | `0` | Interrupt TTS on speech (opt-in) |
