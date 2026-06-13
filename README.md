@@ -275,10 +275,33 @@ Full rules in [`skill/SKILL.md`](skill/SKILL.md).
 |`XAI_TTS_VOICE`      |`eve`                                          |`ara` · `eve` · `leo` · `rex` · `sal`                                 |
 |`TALK_AUTO_LISTEN`   |`1`                                            |Run `listen` after `speak`                                            |
 |`TALK_BARGE_IN`      |`0`                                            |Interrupt TTS on speech                                               |
-|`TALK_IDLE_TIMEOUT_S`|`30`                                           |Exit listen after silence                                             |
-|`VAD_THRESHOLD`      |`0.5`                                          |Speech sensitivity (also in dashboard)                                |
-|`VAD_MIN_SILENCE_MS` |`500`                                          |End-of-turn silence (also in dashboard)                               |
+|`TALK_IDLE_TIMEOUT_S`|`300`                                          |Session-silence window — end listen after N s of no speech (`0` = off)|
+|`VAD_THRESHOLD`      |`0.5`                                          |Speech sensitivity — lower = catches softer speech, higher = ignores background noise/speech (also in dashboard)|
+|`VAD_MIN_SILENCE_MS` |`700`                                          |End-of-turn silence — 700 ms tolerates mid-sentence pauses; lower (~500) for snappier turns (also in dashboard)|
+|`MIC_QUERY`          |_(empty)_                                      |Mic name substring; empty = auto-detect (honors the OS system-default input, skips virtual adapters)|
 |`PORT`               |`7862`                                         |Dashboard port                                                        |
+
+### Tuning the mic for your room
+
+Silero VAD listens through **one microphone with no speaker separation** — it captures
+whatever crosses the speech threshold, including a TV, music, or other people talking
+nearby. In a quiet one-on-one setting it's accurate out of the box; in a noisy room you
+may need to tune two knobs:
+
+| Symptom | Fix |
+|---------|-----|
+| Picks up background speech / TV / other people | Raise `VAD_THRESHOLD` toward `0.6`–`0.7` (stricter — only clearer, louder speech triggers) |
+| Misses your speech / clips soft talkers | Lower `VAD_THRESHOLD` toward `0.3`–`0.4` (more sensitive) |
+| Cuts you off during a natural pause | Raise `VAD_MIN_SILENCE_MS` (e.g. `900`) so longer pauses don't end the turn |
+| Feels sluggish to respond after you stop | Lower `VAD_MIN_SILENCE_MS` toward `500` for snappier endpointing |
+| Grabs the wrong microphone | Set `MIC_QUERY` to a substring of your mic's name (e.g. `MIC_QUERY="Headset"`); see `talk.sh devices` |
+
+```bash
+# Example: noisy room, want it to only react to clear, deliberate speech
+VAD_THRESHOLD=0.65 VAD_MIN_SILENCE_MS=800 talk.sh listen
+```
+
+All values are also adjustable live in the [Web Dashboard](#web-dashboard) (saved to `frontend-config.json`).
 
 ## Service management
 

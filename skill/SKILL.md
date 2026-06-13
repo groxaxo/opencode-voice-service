@@ -107,7 +107,7 @@ When you receive empty stdout from `talk.sh speak`, **exit the conversation loop
 | `TALK_READY_CUE` | 1 | Play a short tone before `listen` |
 | `TALK_READY_SOUND` | Tink.aiff | macOS system sound for ready cue |
 | `TALK_READY_DELAY_MS` | 700 | Ignore mic after cue |
-| `VAD_THRESHOLD` | 0.5 | Lower = more sensitive |
+| `VAD_THRESHOLD` | 0.5 | Speech sensitivity — lower = catches softer speech; raise toward 0.6–0.7 to ignore background noise / other speakers (single mic, no speaker separation) |
 | `VAD_MIN_SILENCE_MS` | 700 | End-of-turn silence (700ms tolerates mid-sentence pauses; lower for snappier turns) |
 | `MIC_QUERY` | _(empty)_ | Mic name substring; empty = auto-detect → honors the macOS system-default input (System Settings → Sound → Input), skipping virtual adapters (NoMachine, VirtualBox, VMware) |
 | `TALK_AUTO_LISTEN` | `1` | After `speak`, run `listen` |
@@ -122,6 +122,7 @@ When you receive empty stdout from `talk.sh speak`, **exit the conversation loop
 | No transcription | `talk.sh status` — check Parakeet ONNX on `:5093`. macOS: `launchctl kickstart -k gui/$UID/com.opencode.parakeet-stt`. Linux: `systemctl --user start opencode-parakeet-stt`. Windows: `Start-ScheduledTask 'OpenCode-Parakeet-STT'` |
 | No TTS (Supertonic) | `talk.sh status` — check Supertonic ONNX on `:8766`. macOS: `launchctl kickstart -k gui/$UID/com.opencode.supertonic`. Linux: `systemctl --user start opencode-supertonic`. Windows: `Start-ScheduledTask 'OpenCode-Supertonic'` |
 | VAD misses speech | `talk.sh devices`; lower `VAD_THRESHOLD` |
+| VAD grabs background speech / TV / others | Raise `VAD_THRESHOLD` toward `0.6`–`0.7` (single mic, no speaker separation — it captures whatever crosses the threshold) |
 | Wrong microphone | `talk.sh devices`; set `MIC_QUERY` to your mic name substring |
 | No audio on Linux | Install ffmpeg: `sudo apt install ffmpeg` or `sudo dnf install ffmpeg` |
 | No audio on Windows | Install ffmpeg: `winget install Gyan.FFmpeg` |
