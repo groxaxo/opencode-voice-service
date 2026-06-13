@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="img/banner.png" alt="OpenCode Voice Service — talk to your AI, on CPU" width="100%">
+  <img src="img/banner.png" alt="Local VoiceMode LLM — talk to your AI, on CPU" width="100%">
 </p>
 
 <h1 align="center">OpenCode Voice Service</h1>
