@@ -93,8 +93,16 @@ fi
 # Grace period (ms) before barge-in VAD activates after TTS playback starts
 # Prevents the VAD from triggering on the initial TTS audio burst
 : "${TALK_BARGE_IN_DELAY_MS:=2000}"
-# Idle timeout: exit listen if no speech detected within N seconds (0=disabled)
-: "${TALK_IDLE_TIMEOUT_S:=30}"
+# Idle timeout: exit listen if no speech detected within N seconds (0=disabled).
+# Session-silence window: if the user is silent for this long, cmd_listen
+# returns empty stdout, signalling the agent to end the conversation loop.
+# Default 300s (5 min) keeps the session open across natural pauses.
+: "${TALK_IDLE_TIMEOUT_S:=300}"
+# Spoken phrases that end the session (case-insensitive substring match,
+# pipe-separated). Default: "stop talk". Spanish example: "para de hablar".
+# When matched, cmd_listen prints empty stdout (= "session ended") so the
+# agent's outer `while true; do talk.sh speak; done` loop can exit.
+: "${TALK_STOP_PHRASES:=stop talk}"
 # -----------------------------------------------------------------------------
 
 # Auto-detect Python
@@ -199,6 +207,27 @@ cmd_ready_cue() {
     fi
 }
 
+# True if $1 matches any of the | separated phrases in TALK_STOP_PHRASES
+# (case-insensitive substring match). Used by cmd_listen to detect a
+# user-initiated session cancel.
+# Uses word-splitting (not read -a) for bash 3.2 portability.
+is_stop_phrase() {
+    local text
+    text=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+    local phrases_lower
+    phrases_lower=$(printf '%s' "${TALK_STOP_PHRASES:-stop talk}" | tr '[:upper:]' '[:lower:]')
+    local saved_ifs="$IFS"
+    IFS='|'
+    for phrase in $phrases_lower; do
+        [ -z "$phrase" ] && continue
+        case "$text" in
+            *"$phrase"*) IFS="$saved_ifs"; return 0 ;;
+        esac
+    done
+    IFS="$saved_ifs"
+    return 1
+}
+
 cmd_listen() {
     local outfile="${1:-opencode-utterance.wav}"
     local ready_delay=0
@@ -216,7 +245,7 @@ cmd_listen() {
         --vad-threshold "$VAD_THRESHOLD" \
         --min-silence-ms "$VAD_MIN_SILENCE_MS" \
         --ready-delay-ms "$ready_delay" \
-        --idle-timeout-s "${TALK_IDLE_TIMEOUT_S:-30}" \
+        --idle-timeout-s "${TALK_IDLE_TIMEOUT_S:-300}" \
         2>/dev/null >"$vad_out" &
     local vad_pid=$!
 
@@ -257,6 +286,13 @@ with open('$vad_out') as f:
         return 1
     fi
 
+    if is_stop_phrase "$text"; then
+        echo "[talk] Stop phrase detected (\"$text\"): ending session" >&2
+        rm -f "$file"
+        echo ""
+        exit 0
+    fi
+
     echo "$text"
     rm -f "$file"
 }
@@ -274,14 +310,17 @@ cmd_speak() {
     fi
 
     # Simple mode: TTS generates + plays, then listen
-    TTS_ENGINE="$TTS_ENGINE" \
+    if ! TTS_ENGINE="$TTS_ENGINE" \
     VIBEVOICE_MODEL="${VIBEVOICE_MODEL:-vibe-realtime-8bit}" \
     VIBEVOICE_VOICE="${VIBEVOICE_VOICE:-en-Emma_woman}" \
     VIBEVOICE_VOICE_AUTO="${VIBEVOICE_VOICE_AUTO:-1}" \
     VIBEVOICE_CFG_SCALE="${VIBEVOICE_CFG_SCALE:-2.0}" \
     VIBEVOICE_DDPM_STEPS="${VIBEVOICE_DDPM_STEPS:-15}" \
     VIBEVOICE_WS_URI="${VIBEVOICE_WS_URI:-ws://127.0.0.1:8010/ws/tts}" \
-        bash "$TTS_SH" "$text" "$lang"
+        bash "$TTS_SH" "$text" "$lang"; then
+        echo "[talk] TTS failed for text: $text" >&2
+        return 1
+    fi
 
     if [ "${TALK_AUTO_LISTEN}" = "1" ]; then
         echo "Listening for your reply…" >&2
